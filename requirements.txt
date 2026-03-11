@@ -1,0 +1,16 @@
+# Google Gemini AI SDK
+google-genai>=1.0.0
+
+# Image processing
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# Networking / WebRTC for Unitree Go2
+go2-webrtc-connect>=0.2.0  # Community WebRTC library for Go2 (recommended)
+aiohttp>=3.9.0
+aiortc>=1.6.0              # Fallback if go2-webrtc-connect has issues
+
+# Configuration
+pyyaml>=6.0
+python-dotenv>=1.0.0
