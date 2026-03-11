@@ -1,0 +1,60 @@
+# =============================================================================
+# Gemini + Jetson Orin + Unitree Go2 — Robot Configuration
+# =============================================================================
+# Supports: Go2 AIR / PRO / PRO 2 / EDU
+
+gemini:
+  # Gemini Robotics Embodied Reasoning model (publicly available)
+  model_id: "gemini-robotics-er-1.5-preview"
+  # Thinking budget: 0-24576. Higher = more accurate but slower.
+  # Use low (0-1024) for simple spatial tasks, high (8192+) for complex reasoning.
+  thinking_budget: 4096
+  # Max tokens in response
+  max_output_tokens: 4096
+
+unitree:
+  # Connection method: "webrtc" (works on Pro/Pro 2 out of the box) or "cyclonedds" (EDU / modified firmware)
+  connection_method: "webrtc"
+  # Robot IP when connected via WiFi AP mode (same for Pro and Pro 2)
+  robot_ip: "192.168.12.1"
+  # Robot IP when connected via Ethernet (for EDU models)
+  robot_ip_ethernet: "192.168.123.18"
+  # WebRTC auth token. Empty string works for Go2 Pro.
+  # For Go2 Pro 2: get the token from the Unitree app (Settings > Robot > Token).
+  # WARNING: Do NOT put your real token here — this file is tracked by git.
+  # Instead, set UNITREE_TOKEN in your config/.env file (which is git-ignored).
+  token: ""
+  # Control mode: "high_level" (sport mode) or "low_level" (direct joint control)
+  control_mode: "high_level"
+  # Maximum velocity limits (safety)
+  max_linear_velocity: 0.8    # m/s
+  max_angular_velocity: 1.0   # rad/s
+
+camera:
+  # Camera source: "gstreamer" (Go2 front cam), "csi" (Jetson CSI), "usb" (USB cam)
+  source: "gstreamer"
+  # GStreamer UDP multicast for Go2 front camera
+  # Go2 Pro and Pro 2 both use 230.1.1.1:1720 on stock firmware.
+  # If your Pro 2 firmware changed this, check with: gst-launch-1.0 udpsrc address=230.1.1.1 port=1720 ...
+  gstreamer_address: "230.1.1.1"
+  gstreamer_port: 1720
+  # Resolution
+  width: 1280
+  height: 720
+  # Capture rate (Hz)
+  fps: 30
+
+jetson:
+  # Power mode: "15W" or "MAXN"
+  # Orin Nano: use "MAXN" (20W) for best performance, "15W" if overheating
+  # Orin NX/AGX: use "MAXN"
+  power_mode: "MAXN"
+  # Network interface for robot communication
+  robot_interface: "eth0"
+  # Network interface for internet (Gemini API calls)
+  internet_interface: "wlan0"
+
+safety:
+  # Watchdog: if no successful Gemini API response in this many seconds,
+  # the robot will stop and wait (prevents runaway if internet drops).
+  watchdog_timeout: 30.0
