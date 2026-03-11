@@ -6,6 +6,8 @@
 gemini:
   # Gemini Robotics Embodied Reasoning model (publicly available)
   model_id: "gemini-robotics-er-1.5-preview"
+
+  GOOGLE_API_KEY = AIzaSyCofs3LCYbWIu9dk0JaZEYdysSFQ3wbWs
   # Thinking budget: 0-24576. Higher = more accurate but slower.
   # Use low (0-1024) for simple spatial tasks, high (8192+) for complex reasoning.
   thinking_budget: 4096
