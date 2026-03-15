@@ -14,8 +14,37 @@ Gemini: sees the cone through the camera, plans a path, walks there
 1. **Unitree Go2 Pro** (or Pro 2 or EDU) — the robot dog
 2. **NVIDIA Jetson Orin Nano** (or NX/AGX) — the brain, mounted on or near the dog
 3. **Android phone** — for initial Go2 setup via the Unitree app
-4. **Gemini API key** — free at https://aistudio.google.com/apikey
-5. **WiFi** — the Jetson needs internet for Gemini API calls
+4. **WiFi router with internet** — Starlink, home router, hotspot, anything
+5. **Gemini API key** — free at https://aistudio.google.com/apikey
+
+## Networking — Read This First
+
+Everything connects over **one WiFi network**. No Ethernet cable needed.
+
+```
+                    ┌──────────────┐
+                    │   Starlink   │
+                    │  (or any     │
+                    │   router)    │
+                    └──────┬───────┘
+                           │ WiFi
+             ┌─────────────┼─────────────┐
+             │             │             │
+        ┌────┴────┐  ┌─────┴─────┐  ┌───┴────┐
+        │  Go2    │  │  Jetson   │  │ Phone  │
+        │  Pro    │  │  Orin     │  │(setup  │
+        │ (robot) │  │ (brain)   │  │  only) │
+        └─────────┘  └───────────┘  └────────┘
+```
+
+**How it works:** The Go2 joins your WiFi in "STA-L mode" (station mode). The Jetson
+connects to the same WiFi. They talk to each other over the local network, and the
+Jetson reaches the Gemini API through the same connection. One network does it all.
+
+**Do I need Ethernet?** No. Ethernet is only needed if you use "AP mode" (where the
+Go2 creates its own hotspot and hogs the Jetson's WiFi). If you have any WiFi router
+with internet (Starlink, home router, phone hotspot), use STA-L mode instead and
+skip Ethernet entirely.
 
 ## Setup (15 minutes)
 
@@ -50,62 +79,67 @@ GOOGLE_API_KEY=AIzaSy...your-key-here
 
 Save and exit (Ctrl+X, then Y, then Enter).
 
-### Step 3: Connect to the Go2
+### Step 3: Connect everything to your WiFi
 
-Pick **one** of these three options:
+You need three things on the same WiFi network: the Go2, the Jetson, and your phone (for initial setup).
 
-**Option A — AP Mode (default, no existing WiFi needed):**
+#### 3a. Put the Go2 on your WiFi (STA-L mode)
 
-The Go2 creates its own WiFi hotspot. Simple but requires a second network adapter on the Jetson for internet.
+The Go2 ships in "AP mode" (it creates its own hotspot). You need to switch it to
+"STA-L mode" so it joins your existing WiFi instead.
 
-1. Turn on the Go2 — it creates a WiFi hotspot
-2. Open the **Unitree app** on your Android phone and connect to the dog
-3. Note the WiFi name and password from the app
-4. Connect the Jetson to the Go2's WiFi:
-   ```bash
-   nmcli device wifi connect "GO2_XXXX" password "the-password"
-   ```
-5. Verify: `ping 192.168.12.1` — you should get replies
+1. **Turn on the Go2** and wait for it to boot (~30 seconds, you'll hear a chime)
+2. **Open the Unitree app** on your Android phone
+3. **Connect to the Go2's temporary hotspot:**
+   - Your phone will see a WiFi network named `GO2_XXXX` — connect to it
+   - Open the Unitree app and pair with the dog
+4. **Switch the Go2 to STA-L mode:**
+   - In the app: **Settings → Networking → Station Mode (STA-L)**
+   - Select your WiFi network (e.g., your Starlink network)
+   - Enter the WiFi password
+   - The Go2 will reboot and join your network
+5. **Find the Go2's new IP address:**
+   - Check the Unitree app — it usually shows the IP after reconnecting
+   - Or check your router's admin page / DHCP client list
+   - The IP will look something like `192.168.1.210` (depends on your router)
+6. **Reconnect your phone to your normal WiFi** (it's still on the Go2's old hotspot)
+7. **Re-pair the app** — open Unitree app, it should find the Go2 on your network
 
-Config: `connection_method: "ap"` and `robot_ip: "192.168.12.1"` (these are the defaults).
+#### 3b. Connect the Jetson to the same WiFi
 
-**Option B — STA-L Mode (recommended if you have a WiFi router):**
+```bash
+# List available networks
+nmcli device wifi list
 
-Both the Go2 and Jetson join your existing WiFi network. This is the easiest setup because the Jetson gets internet and robot access over one connection — no second adapter needed.
+# Connect (use your actual network name and password)
+nmcli device wifi connect "YourStarlinkNetwork" password "your-password"
 
-1. Use the **Unitree app** to put the Go2 in STA-L mode:
-   App → Settings → Networking → Station Mode → select your WiFi network
-2. The Go2 will get an IP from your router (e.g., `192.168.1.210`)
-   Check the app or your router's DHCP table for the assigned IP
-3. Connect the Jetson to the **same WiFi network**
-4. Verify: `ping 192.168.1.210` (use your dog's actual IP)
-5. Edit `config/robot_config.yaml`:
-   ```yaml
-   unitree:
-     connection_method: "sta"
-     robot_ip: "192.168.1.210"   # your dog's IP on the shared network
-   ```
+# Verify you have internet
+curl -s https://generativelanguage.googleapis.com/ > /dev/null && echo "OK" || echo "NO INTERNET"
+```
 
-**Option C — Ethernet (lowest latency, for EDU or advanced setups):**
+#### 3c. Verify the Jetson can reach the Go2
 
-1. Plug an Ethernet cable between the Jetson and Go2
-2. Set a static IP:
-   ```bash
-   sudo nmcli con add type ethernet con-name go2 ifname eth0 ip4 192.168.123.99/24
-   ```
-3. Verify: `ping 192.168.123.18`
+```bash
+# Use the Go2's IP from step 3a
+ping 192.168.1.210
+```
 
-### Step 4: Give the Jetson internet access
+You should see replies. If not, double-check both devices are on the same network.
 
-The Jetson needs internet for Gemini API calls.
+#### 3d. Update the config
 
-- **If using STA-L mode (Option B):** You're already done — the Jetson has internet through the shared WiFi network.
-- **If using AP mode (Option A):** Plug in a **USB WiFi adapter** or Ethernet cable for internet, since the built-in WiFi is connected to the Go2's hotspot.
-- **If using Ethernet (Option C):** Use the Jetson's built-in WiFi for internet.
+Edit `config/robot_config.yaml`:
 
-Verify internet works: `curl -s https://generativelanguage.googleapis.com/ > /dev/null && echo "OK" || echo "NO INTERNET"`
+```yaml
+unitree:
+  connection_method: "sta"        # STA-L mode — everything on one WiFi
+  robot_ip: "192.168.1.210"       # <-- replace with your Go2's actual IP
+```
 
-### Step 5: Verify everything works
+That's it. No Ethernet. No second WiFi adapter. One network.
+
+### Step 4: Verify everything works
 
 ```bash
 source venv/bin/activate
@@ -114,7 +148,7 @@ python scripts/preflight_check.py
 
 This checks your API key, Go2 connection, camera, and all dependencies. Fix anything it flags before continuing.
 
-### Step 6: Run it!
+### Step 5: Run it!
 
 ```bash
 source venv/bin/activate
@@ -133,6 +167,56 @@ python -m src.robot --interactive --web
 ```
 
 **Every time you open a new terminal**, run `source venv/bin/activate` first.
+
+## Alternative Network Setups
+
+Most people should use STA-L mode above. These are for special cases only.
+
+<details>
+<summary><strong>AP Mode — No WiFi router available</strong></summary>
+
+The Go2 creates its own WiFi hotspot. The Jetson connects to it directly.
+
+**Downside:** The Jetson's WiFi is used up talking to the Go2, so you need a
+**second network connection** (Ethernet cable or USB WiFi adapter) for internet.
+
+1. Turn on the Go2 — it creates a `GO2_XXXX` hotspot
+2. Connect Jetson to the hotspot:
+   ```bash
+   nmcli device wifi connect "GO2_XXXX" password "the-password"
+   ```
+3. Plug **Ethernet** into the Jetson for internet (Starlink router, any switch, etc.)
+4. Verify:
+   ```bash
+   ping 192.168.12.1              # Should reach the Go2
+   curl https://google.com        # Should have internet via Ethernet
+   ```
+5. Config stays at defaults:
+   ```yaml
+   unitree:
+     connection_method: "ap"
+     robot_ip: "192.168.12.1"
+   jetson:
+     robot_interface: "wlan0"     # WiFi talks to Go2
+     internet_interface: "eth0"   # Ethernet talks to internet
+   ```
+
+</details>
+
+<details>
+<summary><strong>Ethernet — Direct cable to Go2 (lowest latency)</strong></summary>
+
+For EDU models or advanced setups. Plug Ethernet directly between Jetson and Go2.
+
+1. Connect Ethernet cable between Jetson and Go2
+2. Set a static IP:
+   ```bash
+   sudo nmcli con add type ethernet con-name go2 ifname eth0 ip4 192.168.123.99/24
+   ```
+3. Use Jetson's WiFi for internet
+4. Verify: `ping 192.168.123.18`
+
+</details>
 
 ## Web Dashboard
 
@@ -203,10 +287,16 @@ source venv/bin/activate
 ### "GOOGLE_API_KEY environment variable is required"
 You didn't set up your API key. Go back to Step 2.
 
-### "ping 192.168.12.1" doesn't work
+### Can't ping the Go2
 - Is the Go2 powered on? (check the lights)
-- Is the Jetson connected to the Go2's WiFi? Run `nmcli device wifi list` to see available networks
-- Try rebooting the Go2
+- Are both the Jetson and Go2 on the **same WiFi network**?
+  ```bash
+  # What network is the Jetson on?
+  nmcli -t -f active,ssid dev wifi | grep "^yes"
+  ```
+- Did you switch the Go2 to STA-L mode? (Step 3a) If it's still in AP mode, the Go2 is on its own hotspot, not your WiFi
+- Try rebooting the Go2 — hold the power button for 3 seconds, wait, power on again
+- If using AP mode with Ethernet, make sure `config/robot_config.yaml` has the right `robot_interface` (see AP Mode section)
 
 ### "WebRTC signaling failed (HTTP 403)"
 Your Go2 Pro 2 needs a token. See "Go2 Pro 2 Notes" above.
@@ -231,6 +321,10 @@ The camera connected but no frames arrived yet. Wait a few seconds. If it persis
 - Reduce speed: edit `config/robot_config.yaml`, set `max_linear_velocity: 0.3`
 - Make sure the Go2 is on flat ground with space to move
 - Check battery: low battery causes erratic behavior
+
+### Ping works but WebRTC connection fails
+- Make sure no firewall is blocking UDP traffic between the Jetson and Go2
+- On Starlink/mesh networks: check that "client isolation" or "AP isolation" is disabled in your router settings — this blocks devices from talking to each other even though they're on the same network
 
 ## Project Structure
 

@@ -172,21 +172,31 @@ def main():
             config = _yaml.safe_load(f)
         robot_ip = config.get("unitree", {}).get("robot_ip", "192.168.12.1")
         conn_method = config.get("unitree", {}).get("connection_method", "ap")
+        robot_iface = config.get("jetson", {}).get("robot_interface", "")
     else:
         robot_ip = "192.168.12.1"
         conn_method = "ap"
+        robot_iface = ""
 
     mode_label = "STA-L (shared WiFi)" if conn_method == "sta" else "AP (robot hotspot)"
     print(f"      Connection mode: {mode_label}")
+    if robot_iface:
+        print(f"      Robot interface: {robot_iface}")
 
     # Ping the robot (1 packet, 2 second timeout)
-    ping_result = subprocess.run(
-        ["ping", "-c", "1", "-W", "2", robot_ip],
-        capture_output=True,
-    )
+    # Use -I <interface> to force traffic through the correct adapter
+    # (critical in AP mode where Ethernet goes to internet, WiFi goes to Go2)
+    ping_cmd = ["ping", "-c", "1", "-W", "2"]
+    if robot_iface:
+        ping_cmd += ["-I", robot_iface]
+    ping_cmd.append(robot_ip)
+    ping_result = subprocess.run(ping_cmd, capture_output=True)
     check(
-        f"Go2 reachable at {robot_ip}",
+        f"Go2 reachable at {robot_ip}" + (f" (via {robot_iface})" if robot_iface else ""),
         ping_result.returncode == 0,
+        f"Cannot ping {robot_ip}. Is the Go2 on? Is the Jetson on its WiFi?\n"
+        f"        Connect: nmcli device wifi connect GO2_XXXX password the-password\n"
+        f"        Check interface: ip link show {robot_iface}" if robot_iface else
         f"Cannot ping {robot_ip}. Is the Go2 on? Is the Jetson on its WiFi?\n"
         f"        Connect: nmcli device wifi connect GO2_XXXX password the-password",
         warn_only=True,
@@ -200,11 +210,26 @@ def main():
         urllib.request.urlopen("https://generativelanguage.googleapis.com/", timeout=5)
         check("Internet access to Gemini API", True)
     except Exception:
+        if conn_method == "sta":
+            internet_hint = (
+                "No internet. In STA-L mode your WiFi should provide internet.\n"
+                "        Check that the Jetson is connected to your WiFi:\n"
+                "          nmcli device wifi list\n"
+                "        Check DNS is working:\n"
+                "          nslookup generativelanguage.googleapis.com"
+            )
+        else:
+            internet_hint = (
+                "No internet. In AP mode the Jetson's WiFi is connected to the Go2's\n"
+                "        hotspot, so you need a second connection for internet:\n"
+                "        - Plug in an Ethernet cable to your router, OR\n"
+                "        - Use a USB WiFi adapter for internet\n"
+                "        Or switch to STA-L mode (see README) to use one network for everything."
+            )
         check(
             "Internet access to Gemini API",
             False,
-            "No internet. The Jetson needs a second network connection\n"
-            "        (USB WiFi adapter or Ethernet) for Gemini API calls.",
+            internet_hint,
         )
     print()
 

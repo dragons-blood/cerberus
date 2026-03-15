@@ -89,9 +89,14 @@ class WebServer:
         def api_ping():
             """Ping the robot to check connectivity."""
             robot_ip = self.robot.config["unitree"]["robot_ip"]
+            robot_iface = self.robot.config.get("jetson", {}).get("robot_interface", "")
             try:
+                ping_cmd = ["ping", "-c", "1", "-W", "2"]
+                if robot_iface:
+                    ping_cmd += ["-I", robot_iface]
+                ping_cmd.append(robot_ip)
                 result = subprocess.run(
-                    ["ping", "-c", "1", "-W", "2", robot_ip],
+                    ping_cmd,
                     capture_output=True, text=True, timeout=5,
                 )
                 ok = result.returncode == 0

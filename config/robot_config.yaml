@@ -14,16 +14,20 @@ gemini:
 
 unitree:
   # Connection method:
-  #   "ap"  — Robot acts as WiFi hotspot, Jetson connects to it (default)
-  #   "sta" — STA-L mode: both robot and Jetson on the same WiFi network
-  # STA-L is easier when you have an existing WiFi network — no need to
-  # juggle two WiFi connections on the Jetson.
-  connection_method: "ap"
+  #   "sta" — STA-L mode: Go2 and Jetson both on your WiFi (recommended)
+  #           One network handles everything — robot comms AND internet for Gemini.
+  #           No Ethernet or second WiFi adapter needed.
+  #   "ap"  — AP mode: Go2 creates its own hotspot, Jetson connects to it
+  #           Requires a second connection (Ethernet or USB WiFi) for internet.
+  connection_method: "sta"
 
   # Robot IP address.
-  #   AP mode default:  192.168.12.1  (Go2 hotspot)
-  #   STA-L mode:       whatever IP your router assigns the dog (check your
-  #                     router's DHCP table, or use the Unitree app)
+  #   STA-L mode:  whatever IP your router assigns the Go2 — check the
+  #                Unitree app or your router's DHCP client list.
+  #                Example: 192.168.1.210
+  #   AP mode:     192.168.12.1 (Go2 hotspot, always the same)
+  #
+  # >>> CHANGE THIS to your Go2's actual IP <<<
   robot_ip: "192.168.12.1"
   # Robot IP when connected via Ethernet (for EDU models)
   robot_ip_ethernet: "192.168.123.18"
@@ -57,10 +61,18 @@ jetson:
   # Orin Nano: use "MAXN" (20W) for best performance, "15W" if overheating
   # Orin NX/AGX: use "MAXN"
   power_mode: "MAXN"
-  # Network interface for robot communication
-  robot_interface: "eth0"
+
+  # Network interfaces — tells ping and connectivity checks which adapter to use.
+  # In AP mode you typically have TWO network connections:
+  #   - WiFi (wlan0) → Go2's hotspot at 192.168.12.1
+  #   - Ethernet (eth0) → your router/switch for internet (Gemini API)
+  # In STA-L mode both go over the same WiFi, so these don't matter as much.
+  #
+  # Set these to match YOUR Jetson's actual interface names.
+  # Check with: ip link show
+  robot_interface: "wlan0"
   # Network interface for internet (Gemini API calls)
-  internet_interface: "wlan0"
+  internet_interface: "eth0"
 
 safety:
   # Watchdog: if no successful Gemini API response in this many seconds,
