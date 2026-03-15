@@ -86,11 +86,13 @@ class Go2Controller:
     def __init__(self, robot_ip: str = "192.168.12.1",
                  max_linear_vel: float = 0.8,
                  max_angular_vel: float = 1.0,
-                 token: str = ""):
+                 token: str = "",
+                 connection_method: str = "ap"):
         self.robot_ip = robot_ip
         self.max_linear_vel = max_linear_vel
         self.max_angular_vel = max_angular_vel
         self.token = token
+        self.connection_method = connection_method  # "ap" or "sta"
         self.state = RobotState.DISCONNECTED
         self._connected_event = threading.Event()  # Thread-safe connection flag
         self._on_disconnect_callback = None  # Set by Robot orchestrator
@@ -142,12 +144,17 @@ class Go2Controller:
         """Connect using the go2-webrtc-connect community library."""
         from go2_webrtc_driver.webrtc.go2_connection import Go2WebRTCConnection, WebRTCConnectionMethod
 
-        logger.info("Connecting to Go2 at %s via go2-webrtc-connect...", self.robot_ip)
+        # Map config string to WebRTCConnectionMethod enum
+        method_map = {
+            "ap": WebRTCConnectionMethod.LocalAP,
+            "sta": WebRTCConnectionMethod.LocalSTA,
+        }
+        method = method_map.get(self.connection_method, WebRTCConnectionMethod.LocalAP)
 
-        self._conn = Go2WebRTCConnection(
-            WebRTCConnectionMethod.LocalAP,
-            ip=self.robot_ip,
-        )
+        logger.info("Connecting to Go2 at %s via go2-webrtc-connect (mode=%s)...",
+                     self.robot_ip, self.connection_method)
+
+        self._conn = Go2WebRTCConnection(method, ip=self.robot_ip)
         await self._conn.connect()
 
         self._connected_event.set()
@@ -311,9 +318,9 @@ class Go2Controller:
                         state_data.get("velocity", [0, 0, 0])[2] if isinstance(state_data.get("velocity"), list) else 0,
                     ),
                     imu_rpy=(
-                        state_data.get("imu", {}).get("rpy", [0, 0, 0])[0],
-                        state_data.get("imu", {}).get("rpy", [0, 0, 0])[1],
-                        state_data.get("imu", {}).get("rpy", [0, 0, 0])[2],
+                        state_data.get("imu", {}).get("rpy", [0, 0, 0])[0] if isinstance(state_data.get("imu", {}).get("rpy"), list) else 0,
+                        state_data.get("imu", {}).get("rpy", [0, 0, 0])[1] if isinstance(state_data.get("imu", {}).get("rpy"), list) else 0,
+                        state_data.get("imu", {}).get("rpy", [0, 0, 0])[2] if isinstance(state_data.get("imu", {}).get("rpy"), list) else 0,
                     ),
                     timestamp=time.time(),
                 )

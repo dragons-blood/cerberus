@@ -169,11 +169,16 @@ class Robot:
         unitree_cfg = config["unitree"]
         # Token: config file, then .env, then empty string
         token = unitree_cfg.get("token", "") or os.environ.get("UNITREE_TOKEN", "")
+        # Connection method: "ap" (robot hotspot) or "sta" (shared WiFi / STA-L)
+        conn_method = unitree_cfg.get("connection_method", "webrtc")
+        if conn_method == "webrtc":
+            conn_method = "ap"  # backwards compat: "webrtc" means AP mode
         self.go2 = Go2Controller(
             robot_ip=unitree_cfg["robot_ip"],
             max_linear_vel=unitree_cfg["max_linear_velocity"],
             max_angular_vel=unitree_cfg["max_angular_velocity"],
             token=token,
+            connection_method=conn_method,
         )
 
         self._running = False
@@ -289,6 +294,8 @@ class Robot:
         elif name == "wait":
             seconds = min(params.get("seconds", 1.0), 10.0)
             await self.go2._interruptible_sleep(seconds)
+        elif name == "recovery_stand":
+            await self.go2.recovery_stand()
         elif name == "speak":
             # TTS would be handled by a separate module
             logger.info("ROBOT SAYS: %s", params.get("message", ""))
@@ -359,14 +366,14 @@ class Robot:
             if battery > 0:  # 0 means no data yet
                 if battery <= BATTERY_CRITICAL_PERCENT:
                     logger.critical("Battery critically low (%.0f%%) — stopping robot", battery)
-                    print(f"\nBATTERY CRITICAL: {battery:.0f}%% — robot is stopping for safety.")
+                    print(f"\nBATTERY CRITICAL: {battery:.0f}% — robot is stopping for safety.")
                     await self.go2.stop()
                     await self.go2.sit_down()
                     self._running = False
                     break
                 elif battery <= BATTERY_WARN_PERCENT and not battery_warned:
                     logger.warning("Battery low (%.0f%%) — consider stopping soon", battery)
-                    print(f"\nWARNING: Battery at {battery:.0f}%%")
+                    print(f"\nWARNING: Battery at {battery:.0f}%")
                     battery_warned = True
 
             # --- Capture and plan ---
@@ -414,7 +421,7 @@ class Robot:
         print("  !status  - Robot status")
         print("  !quit    - Shut down\n")
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         while self._running:
             try:
@@ -494,6 +501,10 @@ async def main():
     config = load_config(args.config)
     robot = Robot(config)
 
+    # Capture the event loop reference for thread-safe scheduling from
+    # signal handlers and background threads.
+    main_loop = asyncio.get_running_loop()
+
     # --- Two-stage kill switch ---
     # 1st Ctrl+C → graceful shutdown (stop, sit down, disconnect)
     # 2nd Ctrl+C → EMERGENCY STOP (motors go limp immediately)
@@ -511,11 +522,9 @@ async def main():
             logger.critical("Ctrl+C x2 — EMERGENCY STOP")
             # Schedule emergency stop via the event loop (thread-safe)
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop.call_soon_threadsafe(
-                        lambda: loop.create_task(robot.emergency_stop())
-                    )
+                main_loop.call_soon_threadsafe(
+                    lambda: main_loop.create_task(robot.emergency_stop())
+                )
             except Exception:
                 pass
             # Force exit after a brief delay if the loop is stuck
@@ -529,9 +538,6 @@ async def main():
     signal.signal(signal.SIGTERM, signal_handler)
 
     # --- Optional: spacebar kill switch (background keyboard listener) ---
-    # Capture the event loop reference for thread-safe scheduling
-    main_loop = asyncio.get_event_loop()
-
     def _keyboard_kill_listener():
         """
         Listens for the spacebar as a hardware-style kill switch.

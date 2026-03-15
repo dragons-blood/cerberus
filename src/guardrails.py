@@ -99,11 +99,12 @@ def validate_plan(actions: list, config: GuardrailConfig) -> tuple[list, list[st
     along with a list of warning messages for rejected actions.
     """
     warnings = []
+    original_count = len(actions)
 
     # Check plan size
-    if len(actions) > config.max_actions_per_plan:
+    if original_count > config.max_actions_per_plan:
         warnings.append(
-            f"Plan has {len(actions)} actions (max {config.max_actions_per_plan}) — truncating"
+            f"Plan has {original_count} actions (max {config.max_actions_per_plan}) — truncating"
         )
         actions = actions[:config.max_actions_per_plan]
 
@@ -132,6 +133,6 @@ def validate_plan(actions: list, config: GuardrailConfig) -> tuple[list, list[st
 
     if warnings:
         logger.info("Plan validation: %d/%d actions passed, %d warnings",
-                     len(safe_actions), len(actions), len(warnings))
+                     len(safe_actions), original_count, len(warnings))
 
     return safe_actions, warnings

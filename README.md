@@ -52,7 +52,11 @@ Save and exit (Ctrl+X, then Y, then Enter).
 
 ### Step 3: Connect to the Go2
 
-**Option A — WiFi (easiest, recommended for Go2 Pro / Pro 2):**
+Pick **one** of these three options:
+
+**Option A — AP Mode (default, no existing WiFi needed):**
+
+The Go2 creates its own WiFi hotspot. Simple but requires a second network adapter on the Jetson for internet.
 
 1. Turn on the Go2 — it creates a WiFi hotspot
 2. Open the **Unitree app** on your Android phone and connect to the dog
@@ -63,7 +67,26 @@ Save and exit (Ctrl+X, then Y, then Enter).
    ```
 5. Verify: `ping 192.168.12.1` — you should get replies
 
-**Option B — Ethernet (lower latency, for EDU or advanced setups):**
+Config: `connection_method: "ap"` and `robot_ip: "192.168.12.1"` (these are the defaults).
+
+**Option B — STA-L Mode (recommended if you have a WiFi router):**
+
+Both the Go2 and Jetson join your existing WiFi network. This is the easiest setup because the Jetson gets internet and robot access over one connection — no second adapter needed.
+
+1. Use the **Unitree app** to put the Go2 in STA-L mode:
+   App → Settings → Networking → Station Mode → select your WiFi network
+2. The Go2 will get an IP from your router (e.g., `192.168.1.210`)
+   Check the app or your router's DHCP table for the assigned IP
+3. Connect the Jetson to the **same WiFi network**
+4. Verify: `ping 192.168.1.210` (use your dog's actual IP)
+5. Edit `config/robot_config.yaml`:
+   ```yaml
+   unitree:
+     connection_method: "sta"
+     robot_ip: "192.168.1.210"   # your dog's IP on the shared network
+   ```
+
+**Option C — Ethernet (lowest latency, for EDU or advanced setups):**
 
 1. Plug an Ethernet cable between the Jetson and Go2
 2. Set a static IP:
@@ -74,11 +97,11 @@ Save and exit (Ctrl+X, then Y, then Enter).
 
 ### Step 4: Give the Jetson internet access
 
-The Jetson needs **two network connections**:
-- One to the Go2 (WiFi or Ethernet, from Step 3)
-- One to the internet (for Gemini API calls)
+The Jetson needs internet for Gemini API calls.
 
-If you used WiFi for the Go2, plug in a **USB WiFi adapter** or Ethernet cable for internet. If you used Ethernet for the Go2, use the Jetson's built-in WiFi for internet.
+- **If using STA-L mode (Option B):** You're already done — the Jetson has internet through the shared WiFi network.
+- **If using AP mode (Option A):** Plug in a **USB WiFi adapter** or Ethernet cable for internet, since the built-in WiFi is connected to the Go2's hotspot.
+- **If using Ethernet (Option C):** Use the Jetson's built-in WiFi for internet.
 
 Verify internet works: `curl -s https://generativelanguage.googleapis.com/ > /dev/null && echo "OK" || echo "NO INTERNET"`
 

@@ -6,8 +6,6 @@
 gemini:
   # Gemini Robotics Embodied Reasoning model (publicly available)
   model_id: "gemini-robotics-er-1.5-preview"
-
-  GOOGLE_API_KEY = AIzaSyCofs3LCYbWIu9dk0JaZEYdysSFQ3wbWs
   # Thinking budget: 0-24576. Higher = more accurate but slower.
   # Use low (0-1024) for simple spatial tasks, high (8192+) for complex reasoning.
   thinking_budget: 4096
@@ -15,9 +13,17 @@ gemini:
   max_output_tokens: 4096
 
 unitree:
-  # Connection method: "webrtc" (works on Pro/Pro 2 out of the box) or "cyclonedds" (EDU / modified firmware)
-  connection_method: "webrtc"
-  # Robot IP when connected via WiFi AP mode (same for Pro and Pro 2)
+  # Connection method:
+  #   "ap"  — Robot acts as WiFi hotspot, Jetson connects to it (default)
+  #   "sta" — STA-L mode: both robot and Jetson on the same WiFi network
+  # STA-L is easier when you have an existing WiFi network — no need to
+  # juggle two WiFi connections on the Jetson.
+  connection_method: "ap"
+
+  # Robot IP address.
+  #   AP mode default:  192.168.12.1  (Go2 hotspot)
+  #   STA-L mode:       whatever IP your router assigns the dog (check your
+  #                     router's DHCP table, or use the Unitree app)
   robot_ip: "192.168.12.1"
   # Robot IP when connected via Ethernet (for EDU models)
   robot_ip_ethernet: "192.168.123.18"

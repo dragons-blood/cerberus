@@ -171,8 +171,13 @@ def main():
         with open(config_path) as f:
             config = _yaml.safe_load(f)
         robot_ip = config.get("unitree", {}).get("robot_ip", "192.168.12.1")
+        conn_method = config.get("unitree", {}).get("connection_method", "ap")
     else:
         robot_ip = "192.168.12.1"
+        conn_method = "ap"
+
+    mode_label = "STA-L (shared WiFi)" if conn_method == "sta" else "AP (robot hotspot)"
+    print(f"      Connection mode: {mode_label}")
 
     # Ping the robot (1 packet, 2 second timeout)
     ping_result = subprocess.run(
