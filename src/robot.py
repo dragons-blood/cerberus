@@ -36,6 +36,10 @@ from src.gemini.robotics_client import GeminiRoboticsClient, RobotAction
 from src.guardrails import GuardrailConfig, validate_plan
 from src.unitree.go2_controller import Go2Controller
 from src.vision.camera import Camera
+try:
+    from src.web.server import WebServer
+except ImportError:
+    WebServer = None
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +186,7 @@ class Robot:
         )
 
         self._running = False
+        self._web_server = None
 
     async def start(self):
         """Initialize all subsystems."""
@@ -470,6 +475,10 @@ async def main():
     parser.add_argument("--interactive", action="store_true", help="Interactive command mode")
     parser.add_argument("--interval", type=float, default=3.0,
                         help="Interval between perception-action cycles in continuous mode (seconds)")
+    parser.add_argument("--web", action="store_true",
+                        help="Start local web dashboard (default: http://0.0.0.0:8080)")
+    parser.add_argument("--web-port", type=int, default=8080,
+                        help="Port for the web dashboard (default: 8080)")
     parser.add_argument("--config", type=str, default="config/robot_config.yaml",
                         help="Path to config file")
     parser.add_argument("--log-level", type=str, default="INFO",
@@ -582,6 +591,15 @@ async def main():
 
     try:
         await robot.start()
+
+        # Start web dashboard if requested
+        if args.web:
+            if WebServer is None:
+                print("\nERROR: Flask is not installed. Run: pip install flask")
+                sys.exit(1)
+            robot._web_server = WebServer(robot, port=args.web_port, loop=main_loop)
+            robot._web_server.start()
+            print(f"\n  Web dashboard: http://localhost:{args.web_port}\n")
 
         if args.interactive:
             await robot.run_interactive()

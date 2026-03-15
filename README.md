@@ -127,9 +127,33 @@ python -m src.robot --instruction "walk forward to the red cone"
 
 # Continuous loop (robot keeps executing the instruction)
 python -m src.robot --instruction "follow the person" --continuous
+
+# With web dashboard (opens a browser UI on port 8080)
+python -m src.robot --interactive --web
 ```
 
 **Every time you open a new terminal**, run `source venv/bin/activate` first.
+
+## Web Dashboard
+
+Add `--web` to any run mode to start a local browser UI:
+
+```bash
+python -m src.robot --interactive --web
+# Open http://<jetson-ip>:8080 in your browser
+```
+
+The dashboard provides:
+- **Emergency stop button** — big red button, also triggered by spacebar
+- **Live status** — battery, connection, IMU, camera FPS
+- **Manual controls** — WASD / arrow keys or on-screen D-pad
+- **Natural language input** — type instructions for Gemini
+- **Camera feed** — live MJPEG stream of what the robot sees
+- **Robot ping** — one-click connectivity check
+- **API key setup** — enter your Gemini key without SSH
+- **Log viewer** — live tail of `logs/robot.log`
+
+Access it from any device on the same network (phone, tablet, laptop). Use `--web-port 9090` to change the port.
 
 ## Kill Switch (Emergency Stop)
 
@@ -224,8 +248,12 @@ ROBOT/
 │   │   └── robotics_client.py   # Talks to Gemini API
 │   ├── unitree/
 │   │   └── go2_controller.py    # Talks to Go2 via WebRTC
-│   └── vision/
-│       └── camera.py            # Captures camera frames
+│   ├── vision/
+│   │   └── camera.py            # Captures camera frames
+│   └── web/
+│       ├── server.py            # Local web dashboard (--web flag)
+│       └── templates/
+│           └── index.html       # Dashboard UI
 └── README.md
 ```
 

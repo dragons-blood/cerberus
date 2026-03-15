@@ -9,7 +9,7 @@ Defense layers:
   1. Action allowlist — only known safe actions are permitted
   2. Parameter bounds — velocity, distance, angle limits
   3. Sequence analysis — detect suspicious action patterns
-  4. Rate limiting — prevent rapid repeated commands
+  4. Duplicate plan detection — reject identical consecutive plans
 """
 
 import logging
@@ -130,6 +130,17 @@ def validate_plan(actions: list, config: GuardrailConfig) -> tuple[list, list[st
                 logger.warning("GUARDRAIL: %s", msg)
                 # Don't block the whole plan, just flag it
                 break
+
+    # 4. Duplicate action detection — same action repeated many times is suspicious
+    if len(safe_actions) >= 4:
+        action_names = [a.action for a in safe_actions]
+        # If more than 75% of actions are identical, flag it
+        from collections import Counter
+        most_common_action, most_common_count = Counter(action_names).most_common(1)[0]
+        if most_common_count >= len(safe_actions) * 0.75 and most_common_action != "wait":
+            msg = f"Repetitive plan: '{most_common_action}' repeated {most_common_count}/{len(safe_actions)} times"
+            warnings.append(msg)
+            logger.warning("GUARDRAIL: %s", msg)
 
     if warnings:
         logger.info("Plan validation: %d/%d actions passed, %d warnings",

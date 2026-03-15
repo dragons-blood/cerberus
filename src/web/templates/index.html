@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gemini Robot Dog</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --surface: #16213e;
+    --surface2: #0f3460;
+    --accent: #e94560;
+    --green: #00d474;
+    --yellow: #ffc107;
+    --text: #eee;
+    --text-dim: #999;
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  header {
+    background: var(--surface);
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 2px solid var(--surface2);
+  }
+  header h1 { font-size: 18px; font-weight: 600; }
+  .conn-badge {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .conn-badge.ok { background: var(--green); color: #000; }
+  .conn-badge.err { background: var(--accent); color: #fff; }
+  .conn-badge.unknown { background: #555; color: #fff; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    padding: 12px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--surface);
+    border-radius: var(--radius);
+    padding: 16px;
+    border: 1px solid var(--surface2);
+  }
+  .card h2 {
+    font-size: 14px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 12px;
+  }
+
+  /* Emergency Stop */
+  .estop-card { grid-column: 1 / -1; }
+  .estop-btn {
+    width: 100%;
+    padding: 18px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 22px;
+    font-weight: 700;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    transition: transform 0.1s;
+  }
+  .estop-btn:hover { filter: brightness(1.1); }
+  .estop-btn:active { transform: scale(0.98); }
+
+  /* Status */
+  .status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 8px;
+  }
+  .stat {
+    background: var(--bg);
+    padding: 10px;
+    border-radius: var(--radius);
+    text-align: center;
+  }
+  .stat .label { font-size: 11px; color: var(--text-dim); }
+  .stat .value { font-size: 20px; font-weight: 600; margin-top: 4px; }
+  .stat .value.green { color: var(--green); }
+  .stat .value.yellow { color: var(--yellow); }
+  .stat .value.red { color: var(--accent); }
+
+  /* Camera */
+  .camera-card { grid-column: 1 / -1; }
+  .camera-feed {
+    width: 100%;
+    max-height: 400px;
+    object-fit: contain;
+    background: #000;
+    border-radius: var(--radius);
+    display: block;
+  }
+  .camera-placeholder {
+    width: 100%;
+    height: 200px;
+    background: #000;
+    border-radius: var(--radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim);
+    font-size: 14px;
+  }
+
+  /* Controls */
+  .dpad {
+    display: grid;
+    grid-template-columns: 60px 60px 60px;
+    grid-template-rows: 50px 50px 50px;
+    gap: 4px;
+    justify-content: center;
+    margin-bottom: 12px;
+  }
+  .dpad button {
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid #335;
+    border-radius: 6px;
+    font-size: 18px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.1s;
+  }
+  .dpad button:hover { background: #1a4a7a; }
+  .dpad button:active { background: var(--green); color: #000; }
+  .dpad .empty { visibility: hidden; }
+
+  .action-btns {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .action-btns button {
+    padding: 8px 14px;
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid #335;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .action-btns button:hover { background: #1a4a7a; }
+  .action-btns button.stop-btn { background: #b33; border-color: #f55; }
+  .action-btns button.stop-btn:hover { background: #d44; }
+
+  /* Instruction */
+  .instruction-form {
+    display: flex;
+    gap: 8px;
+  }
+  .instruction-form input {
+    flex: 1;
+    padding: 10px 12px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--surface2);
+    border-radius: var(--radius);
+    font-size: 14px;
+    outline: none;
+  }
+  .instruction-form input:focus { border-color: var(--green); }
+  .instruction-form button {
+    padding: 10px 20px;
+    background: var(--green);
+    color: #000;
+    border: none;
+    border-radius: var(--radius);
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  /* API Key */
+  .key-form {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .key-form input {
+    flex: 1;
+    padding: 8px 12px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--surface2);
+    border-radius: var(--radius);
+    font-size: 13px;
+    font-family: monospace;
+    outline: none;
+  }
+  .key-form button {
+    padding: 8px 16px;
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid #335;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .key-status { font-size: 13px; margin-bottom: 6px; }
+  .key-status .set { color: var(--green); }
+  .key-status .unset { color: var(--accent); }
+
+  /* Ping */
+  .ping-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+  }
+  .ping-btn {
+    padding: 6px 14px;
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid #335;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .ping-result { font-size: 13px; }
+
+  /* Logs */
+  .log-box {
+    background: #000;
+    color: #0f0;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    padding: 10px;
+    border-radius: var(--radius);
+    height: 200px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .log-controls {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+    align-items: center;
+  }
+  .log-controls label { font-size: 12px; color: var(--text-dim); }
+  .log-controls input[type="checkbox"] { accent-color: var(--green); }
+
+  /* Notification toast */
+  .toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    padding: 12px 20px;
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-weight: 500;
+    z-index: 1000;
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+  .toast.ok { background: var(--green); color: #000; }
+  .toast.err { background: var(--accent); color: #fff; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Gemini Robot Dog</h1>
+  <span id="connBadge" class="conn-badge unknown">checking...</span>
+</header>
+
+<div class="grid">
+
+  <!-- Emergency Stop -->
+  <div class="card estop-card">
+    <button class="estop-btn" onclick="emergencyStop()">EMERGENCY STOP</button>
+  </div>
+
+  <!-- Status -->
+  <div class="card">
+    <h2>Robot Status</h2>
+    <div class="status-grid">
+      <div class="stat">
+        <div class="label">State</div>
+        <div class="value" id="stState">--</div>
+      </div>
+      <div class="stat">
+        <div class="label">Battery</div>
+        <div class="value" id="stBattery">--%</div>
+      </div>
+      <div class="stat">
+        <div class="label">Camera</div>
+        <div class="value" id="stCamera">--</div>
+      </div>
+      <div class="stat">
+        <div class="label">FPS</div>
+        <div class="value" id="stFps">--</div>
+      </div>
+      <div class="stat">
+        <div class="label">Vel (m/s)</div>
+        <div class="value" id="stVel">--</div>
+      </div>
+      <div class="stat">
+        <div class="label">IMU Roll</div>
+        <div class="value" id="stRoll">--</div>
+      </div>
+    </div>
+    <div class="ping-row">
+      <button class="ping-btn" onclick="pingRobot()">Ping Robot</button>
+      <span class="ping-result" id="pingResult"></span>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="card">
+    <h2>Manual Controls</h2>
+    <div class="dpad">
+      <div class="empty"></div>
+      <button onclick="cmd('move_forward')" title="Forward">&#9650;</button>
+      <div class="empty"></div>
+      <button onclick="cmd('turn_left')" title="Turn Left">&#9664;</button>
+      <button onclick="cmd('stop')" class="stop-btn" title="Stop">&#9632;</button>
+      <button onclick="cmd('turn_right')" title="Turn Right">&#9654;</button>
+      <div class="empty"></div>
+      <button onclick="cmd('move_backward')" title="Backward">&#9660;</button>
+      <div class="empty"></div>
+    </div>
+    <div class="action-btns">
+      <button onclick="cmd('stand_up')">Stand</button>
+      <button onclick="cmd('sit_down')">Sit</button>
+      <button onclick="cmd('recovery_stand')">Recovery</button>
+      <button onclick="cmd('stop')" class="stop-btn">Stop</button>
+    </div>
+  </div>
+
+  <!-- Natural Language Instruction -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <h2>Instruction</h2>
+    <div class="instruction-form">
+      <input type="text" id="instructionInput" placeholder='e.g. "walk to the red cone"'
+             onkeydown="if(event.key==='Enter') sendInstruction()">
+      <button onclick="sendInstruction()">Send</button>
+    </div>
+  </div>
+
+  <!-- Camera Feed -->
+  <div class="card camera-card">
+    <h2>Camera Feed</h2>
+    <div id="cameraContainer">
+      <div class="camera-placeholder" id="cameraPlaceholder">Camera stream not started</div>
+    </div>
+    <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+      <button class="ping-btn" onclick="toggleStream()">Toggle Stream</button>
+      <span style="font-size:12px; color:var(--text-dim);" id="streamStatus">Off</span>
+    </div>
+  </div>
+
+  <!-- API Key -->
+  <div class="card">
+    <h2>API Key</h2>
+    <div class="key-status" id="keyStatus">Checking...</div>
+    <div class="key-form">
+      <input type="password" id="keyInput" placeholder="AIza...your-key-here">
+      <button onclick="setApiKey()">Save</button>
+    </div>
+  </div>
+
+  <!-- Logs -->
+  <div class="card">
+    <h2>Logs</h2>
+    <div class="log-controls">
+      <label><input type="checkbox" id="autoScroll" checked> Auto-scroll</label>
+      <label><input type="checkbox" id="autoRefreshLogs" checked> Auto-refresh</label>
+    </div>
+    <div class="log-box" id="logBox">Loading...</div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ---- State ----
+let streaming = false;
+let statusInterval = null;
+let logInterval = null;
+
+// ---- Toast notifications ----
+function toast(msg, type='ok') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show ' + type;
+  setTimeout(() => t.className = 'toast', 2500);
+}
+
+// ---- API helpers ----
+async function api(path, opts={}) {
+  try {
+    const r = await fetch(path, opts);
+    return await r.json();
+  } catch(e) {
+    console.error('API error:', e);
+    return null;
+  }
+}
+
+// ---- Emergency Stop ----
+async function emergencyStop() {
+  toast('EMERGENCY STOP SENT', 'err');
+  await api('/api/emergency_stop', {method:'POST'});
+}
+
+// ---- Movement Commands ----
+async function cmd(action, params={}) {
+  const r = await api('/api/command', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({action, params}),
+  });
+  if (r && r.status === 'ok') {
+    // silent success for movement commands
+  } else if (r && r.error) {
+    toast(r.error, 'err');
+  }
+}
+
+// ---- Instruction ----
+async function sendInstruction() {
+  const input = document.getElementById('instructionInput');
+  const text = input.value.trim();
+  if (!text) return;
+  const r = await api('/api/instruction', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({instruction: text}),
+  });
+  if (r && r.status === 'instruction_sent') {
+    toast('Instruction sent');
+    input.value = '';
+  } else {
+    toast('Failed to send', 'err');
+  }
+}
+
+// ---- Ping ----
+async function pingRobot() {
+  const el = document.getElementById('pingResult');
+  el.textContent = 'Pinging...';
+  const r = await api('/api/ping');
+  if (!r) {
+    el.innerHTML = '<span style="color:var(--accent)">Request failed</span>';
+    return;
+  }
+  if (r.reachable) {
+    el.innerHTML = `<span style="color:var(--green)">OK</span> — ${r.ip} (${r.rtt_ms}ms)`;
+  } else {
+    el.innerHTML = `<span style="color:var(--accent)">UNREACHABLE</span> — ${r.ip}`;
+  }
+}
+
+// ---- Status polling ----
+async function updateStatus() {
+  const r = await api('/api/status');
+  if (!r) return;
+
+  // Connection badge
+  const badge = document.getElementById('connBadge');
+  if (r.connected) {
+    badge.textContent = 'Connected';
+    badge.className = 'conn-badge ok';
+  } else {
+    badge.textContent = 'Disconnected';
+    badge.className = 'conn-badge err';
+  }
+
+  // State
+  document.getElementById('stState').textContent = r.state;
+
+  // Battery
+  const batEl = document.getElementById('stBattery');
+  batEl.textContent = r.battery > 0 ? r.battery.toFixed(0) + '%' : '--';
+  batEl.className = 'value' + (r.battery <= 10 ? ' red' : r.battery <= 20 ? ' yellow' : ' green');
+
+  // Camera
+  const camEl = document.getElementById('stCamera');
+  camEl.textContent = r.camera_running ? 'ON' : 'OFF';
+  camEl.className = 'value' + (r.camera_running ? ' green' : ' red');
+
+  // FPS
+  document.getElementById('stFps').textContent = r.camera_fps > 0 ? r.camera_fps : '--';
+
+  // Velocity
+  const vel = r.velocity;
+  const speed = Math.sqrt(vel[0]*vel[0] + vel[1]*vel[1]).toFixed(2);
+  document.getElementById('stVel').textContent = speed;
+
+  // IMU
+  const roll = (r.imu_rpy[0] * 180 / Math.PI).toFixed(1);
+  document.getElementById('stRoll').textContent = roll + '\u00b0';
+}
+
+// ---- Camera stream ----
+function toggleStream() {
+  const container = document.getElementById('cameraContainer');
+  const status = document.getElementById('streamStatus');
+  if (streaming) {
+    container.innerHTML = '<div class="camera-placeholder" id="cameraPlaceholder">Camera stream stopped</div>';
+    status.textContent = 'Off';
+    streaming = false;
+  } else {
+    container.innerHTML = '<img class="camera-feed" src="/api/camera/stream" alt="Camera Feed">';
+    status.textContent = 'Live';
+    streaming = true;
+  }
+}
+
+// ---- API Key ----
+async function checkKey() {
+  const r = await api('/api/key');
+  const el = document.getElementById('keyStatus');
+  if (!r) { el.textContent = 'Error checking key'; return; }
+  if (r.configured) {
+    el.innerHTML = '<span class="set">Configured</span> — ' + (r.key_preview || '');
+  } else {
+    el.innerHTML = '<span class="unset">Not configured</span> — enter your key below';
+  }
+}
+
+async function setApiKey() {
+  const input = document.getElementById('keyInput');
+  const key = input.value.trim();
+  if (!key) return;
+  const r = await api('/api/key', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({key}),
+  });
+  if (r && r.status === 'ok') {
+    toast('API key saved');
+    input.value = '';
+    checkKey();
+  } else {
+    toast(r ? r.error : 'Failed', 'err');
+  }
+}
+
+// ---- Logs ----
+async function refreshLogs() {
+  if (!document.getElementById('autoRefreshLogs').checked) return;
+  const r = await api('/api/logs?lines=80');
+  if (!r || !r.lines) return;
+  const box = document.getElementById('logBox');
+  box.textContent = r.lines.join('\n');
+  if (document.getElementById('autoScroll').checked) {
+    box.scrollTop = box.scrollHeight;
+  }
+}
+
+// ---- Keyboard shortcuts ----
+document.addEventListener('keydown', (e) => {
+  // Don't capture when typing in inputs
+  if (e.target.tagName === 'INPUT') return;
+
+  switch(e.key) {
+    case ' ':
+      e.preventDefault();
+      emergencyStop();
+      break;
+    case 'w': case 'ArrowUp':    cmd('move_forward'); break;
+    case 's': case 'ArrowDown':  cmd('move_backward'); break;
+    case 'a': case 'ArrowLeft':  cmd('turn_left'); break;
+    case 'd': case 'ArrowRight': cmd('turn_right'); break;
+    case 'q': cmd('stop'); break;
+  }
+});
+
+// ---- Init ----
+updateStatus();
+checkKey();
+refreshLogs();
+statusInterval = setInterval(updateStatus, 1000);
+logInterval = setInterval(refreshLogs, 3000);
+</script>
+
+</body>
+</html>

@@ -199,6 +199,9 @@ class Go2Controller:
         offer = await self._pc.createOffer()
         await self._pc.setLocalDescription(offer)
 
+        # WebRTC signaling endpoint. Port 8081 is the default for Go2 Pro
+        # on stock firmware. Some firmware versions or models may use 9991.
+        # The community library (go2-webrtc-connect) handles this internally.
         signal_url = f"http://{self.robot_ip}:8081/offer"
         async with aiohttp.ClientSession() as session:
             payload = {
@@ -402,13 +405,18 @@ class Go2Controller:
         """
         Sleep in small steps so movement can be interrupted by Ctrl+C or disconnect.
 
-        Checks connection status every `step` seconds. If connection is lost,
-        returns early so the caller can stop gracefully.
+        Checks connection status every `step` seconds. If connection is lost
+        or the current asyncio task is cancelled, returns early so the caller
+        can stop gracefully.
         """
         elapsed = 0.0
         while elapsed < duration:
             chunk = min(step, duration - elapsed)
-            await asyncio.sleep(chunk)
+            try:
+                await asyncio.sleep(chunk)
+            except asyncio.CancelledError:
+                logger.info("Movement interrupted by task cancellation")
+                return
             elapsed += chunk
             if not self.connected:
                 logger.warning("Connection lost during movement — aborting")
