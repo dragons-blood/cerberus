@@ -13,12 +13,12 @@ raw JSON prompting. This gives structured, typed outputs and avoids the
 fragility of parsing free-form JSON from the model.
 """
 
+import concurrent.futures
 import io
 import json
 import logging
 import os
 import re
-import signal
 import threading
 from dataclasses import dataclass
 from typing import Optional
@@ -196,6 +196,25 @@ class GeminiRoboticsClient:
         logger.info("Gemini Robotics-ER client initialized (model=%s)", model_id)
 
     @staticmethod
+    def _sanitize_target(target: str, max_length: int = 200) -> str:
+        """Sanitize a user-supplied target string to mitigate prompt injection."""
+        # Truncate to prevent overloading the prompt
+        target = target[:max_length]
+        # Strip control characters and common injection patterns
+        target = re.sub(r'[\x00-\x1f\x7f]', '', target)
+        # Remove patterns that try to override system instructions
+        injection_patterns = [
+            r'ignore\s+(previous|above|all)\s+(instructions?|prompts?)',
+            r'system\s*prompt',
+            r'you\s+are\s+now',
+            r'new\s+instructions?',
+            r'disregard',
+        ]
+        for pattern in injection_patterns:
+            target = re.sub(pattern, '[filtered]', target, flags=re.IGNORECASE)
+        return target.strip()
+
+    @staticmethod
     def _extract_json(text: str) -> str:
         """Extract JSON from a model response that may be wrapped in markdown fences."""
         # Try to find a fenced code block (```json ... ``` or ``` ... ```)
@@ -229,36 +248,19 @@ class GeminiRoboticsClient:
         Call the Gemini API with a timeout.
 
         Returns the response object, or None if the call failed/timed out.
-        Uses SIGALRM on Unix (main thread only). No timeout protection on
-        Windows or from background threads (the call can still block).
+        Uses a thread pool executor for timeout — works safely from any thread
+        and doesn't interfere with signal handlers (unlike SIGALRM).
         """
-        use_alarm = (
-            hasattr(signal, "SIGALRM")
-            and threading.current_thread() is threading.main_thread()
-        )
-
-        def _timeout_handler(signum, frame):
-            raise TimeoutError("Gemini API timed out")
-
         try:
-            if use_alarm:
-                old_handler = signal.getsignal(signal.SIGALRM)
-                signal.signal(signal.SIGALRM, _timeout_handler)
-                signal.alarm(API_TIMEOUT)
-
-            try:
-                response = self.client.models.generate_content(
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    self.client.models.generate_content,
                     model=self.model_id,
                     contents=contents,
                     config=config,
                 )
-            finally:
-                if use_alarm:
-                    signal.alarm(0)
-                    signal.signal(signal.SIGALRM, old_handler)
-
-            return response
-        except TimeoutError:
+                return future.result(timeout=API_TIMEOUT)
+        except concurrent.futures.TimeoutError:
             logger.error("Gemini API timed out after %ds", API_TIMEOUT)
             return None
         except Exception as e:
@@ -314,8 +316,9 @@ class GeminiRoboticsClient:
             List of detected objects with normalized (0-1) coordinates.
         """
         if target:
+            safe_target = self._sanitize_target(target)
             prompt = (
-                f'Point to the "{target}" in the image. '
+                f'Point to the "{safe_target}" in the image. '
                 'Return JSON: [{"point": [y, x], "label": "name"}] '
                 'with coordinates normalized to 0-1000.'
             )
@@ -357,8 +360,9 @@ class GeminiRoboticsClient:
             List of bounding boxes with normalized (0-1) coordinates.
         """
         if target:
+            safe_target = self._sanitize_target(target)
             prompt = (
-                f'Draw a bounding box around the "{target}". '
+                f'Draw a bounding box around the "{safe_target}". '
                 'Return JSON: [{"box_2d": [ymin, xmin, ymax, xmax], "label": "name"}] '
                 "with coordinates normalized to 0-1000."
             )
@@ -401,8 +405,9 @@ class GeminiRoboticsClient:
         Returns:
             Ordered list of waypoints with normalized (0-1) coordinates.
         """
+        safe_instruction = self._sanitize_target(instruction)
         prompt = (
-            f'Given the instruction: "{instruction}", '
+            f'Given the instruction: "{safe_instruction}", '
             "plan a trajectory as a sequence of 2D waypoints in the image. "
             'Return JSON: [{"point": [y, x], "label": "0"}, ...] '
             'with coordinates normalized to 0-1000 and labels as sequential indices.'
@@ -446,9 +451,10 @@ class GeminiRoboticsClient:
         """
         image_bytes, mime_type = self._image_to_bytes(image)
 
+        safe_instruction = self._sanitize_target(instruction)
         prompt = (
             f'You are controlling a quadruped robot dog (Unitree Go2). '
-            f'Look at the camera image and execute this instruction: "{instruction}"\n\n'
+            f'Look at the camera image and execute this instruction: "{safe_instruction}"\n\n'
             f'Call the appropriate robot action functions in sequence. '
             f'You may call multiple functions to complete the task.'
         )

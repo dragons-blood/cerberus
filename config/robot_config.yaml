@@ -43,8 +43,14 @@ unitree:
   max_angular_velocity: 1.0   # rad/s
 
 camera:
-  # Camera source: "gstreamer" (Go2 front cam), "csi" (Jetson CSI), "usb" (USB cam)
-  source: "gstreamer"
+  # Camera source:
+  #   "auto"      — auto-selects based on connection method (recommended)
+  #                  STA-L → webrtc, AP → gstreamer
+  #   "webrtc"    — frames come through the WebRTC connection (works everywhere)
+  #   "gstreamer" — Go2 front cam via UDP multicast (AP mode only)
+  #   "csi"       — Jetson CSI camera
+  #   "usb"       — USB webcam
+  source: "auto"
   # GStreamer UDP multicast for Go2 front camera
   # Go2 Pro and Pro 2 both use 230.1.1.1:1720 on stock firmware.
   # If your Pro 2 firmware changed this, check with: gst-launch-1.0 udpsrc address=230.1.1.1 port=1720 ...

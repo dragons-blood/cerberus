@@ -154,9 +154,32 @@ class Robot:
         self.config = config
         self.guardrails = GuardrailConfig()
 
+        unitree_cfg = config["unitree"]
+        # Token: config file, then .env, then empty string
+        token = unitree_cfg.get("token", "") or os.environ.get("UNITREE_TOKEN", "")
+        # Connection method: "ap" (robot hotspot) or "sta" (shared WiFi / STA-L)
+        conn_method = unitree_cfg.get("connection_method", "webrtc")
+        if conn_method == "webrtc":
+            conn_method = "ap"  # backwards compat: "webrtc" means AP mode
+
+        # Auto-select camera source based on connection method.
+        # In STA-L mode, UDP multicast doesn't cross WiFi routers, so the
+        # camera must get frames through the WebRTC connection instead.
+        camera_source = config["camera"]["source"]
+        if camera_source == "auto":
+            camera_source = "webrtc" if conn_method == "sta" else "gstreamer"
+            logger.info("Camera source auto-selected: %s (connection=%s)",
+                        camera_source, conn_method)
+        elif conn_method == "sta" and camera_source == "gstreamer":
+            logger.warning(
+                "Camera source is 'gstreamer' but connection is STA-L. "
+                "UDP multicast won't work across a WiFi router. "
+                "Set camera.source to 'auto' or 'webrtc' in robot_config.yaml."
+            )
+
         # Initialize subsystems
         self.camera = Camera(
-            source=config["camera"]["source"],
+            source=camera_source,
             width=config["camera"]["width"],
             height=config["camera"]["height"],
             fps=config["camera"]["fps"],
@@ -170,13 +193,6 @@ class Robot:
             max_output_tokens=config["gemini"]["max_output_tokens"],
         )
 
-        unitree_cfg = config["unitree"]
-        # Token: config file, then .env, then empty string
-        token = unitree_cfg.get("token", "") or os.environ.get("UNITREE_TOKEN", "")
-        # Connection method: "ap" (robot hotspot) or "sta" (shared WiFi / STA-L)
-        conn_method = unitree_cfg.get("connection_method", "webrtc")
-        if conn_method == "webrtc":
-            conn_method = "ap"  # backwards compat: "webrtc" means AP mode
         self.go2 = Go2Controller(
             robot_ip=unitree_cfg["robot_ip"],
             max_linear_vel=unitree_cfg["max_linear_velocity"],
@@ -185,6 +201,10 @@ class Robot:
             connection_method=conn_method,
         )
 
+        # If camera gets frames via WebRTC, tell the controller about it
+        if camera_source == "webrtc":
+            self.go2.set_camera(self.camera)
+
         self._running = False
         self._web_server = None
 
@@ -192,7 +212,9 @@ class Robot:
         """Initialize all subsystems."""
         logger.info("Starting robot systems...")
 
-        # Start camera (with timeout so we don't hang if Go2 isn't streaming)
+        # In WebRTC camera mode, start camera first (it just waits for frames),
+        # then connect to Go2 (which feeds frames via WebRTC video track).
+        # In GStreamer mode, start camera first too (it opens the UDP multicast).
         try:
             self.camera.start()
         except RuntimeError as e:
@@ -200,9 +222,10 @@ class Robot:
             print(f"\nERROR: {e}")
             print("The robot cannot operate without a camera. Exiting.\n")
             sys.exit(1)
-        logger.info("Camera ready (source=%s)", self.config["camera"]["source"])
+        logger.info("Camera ready (source=%s)", self.camera.source)
 
         # Connect to Go2 (with timeout)
+        # In webrtc camera mode, this also starts the video frame pipeline.
         try:
             await asyncio.wait_for(self.go2.connect(), timeout=15.0)
         except asyncio.TimeoutError:
@@ -364,6 +387,7 @@ class Robot:
 
         last_successful_plan = time.time()
         battery_warned = False
+        watchdog_stopped = False
 
         while self._running:
             # --- Battery check ---
@@ -392,6 +416,7 @@ class Robot:
 
             if actions:
                 last_successful_plan = time.time()
+                watchdog_stopped = False
                 for action in actions:
                     if not self._running:
                         break
@@ -399,12 +424,11 @@ class Robot:
             else:
                 # --- Watchdog: no successful plan for too long ---
                 since_last = time.time() - last_successful_plan
-                if since_last > watchdog_timeout:
+                if since_last > watchdog_timeout and not watchdog_stopped:
                     logger.warning("Watchdog: no successful plan for %.0fs — stopping robot",
                                    since_last)
                     await self.go2.stop()
-                    # Reset watchdog so we don't spam stops
-                    last_successful_plan = time.time()
+                    watchdog_stopped = True  # Stay stopped; don't spam stop commands
 
             await asyncio.sleep(interval)
 
@@ -493,10 +517,14 @@ async def main():
         format=log_format,
         datefmt=log_datefmt,
     )
-    # Add file handler so robot behavior is recorded to disk
+    # Add rotating file handler so robot behavior is recorded to disk
+    # without unbounded growth (max 5MB per file, keep 3 backups)
+    from logging.handlers import RotatingFileHandler
     log_dir = Path(__file__).parent.parent / "logs"
     log_dir.mkdir(exist_ok=True)
-    file_handler = logging.FileHandler(log_dir / "robot.log")
+    file_handler = RotatingFileHandler(
+        log_dir / "robot.log", maxBytes=5_000_000, backupCount=3
+    )
     file_handler.setFormatter(logging.Formatter(log_format, datefmt=log_datefmt))
     logging.getLogger().addHandler(file_handler)
 
@@ -553,14 +581,23 @@ async def main():
         Works when running on the Orin's desktop with a keyboard attached.
         Falls back gracefully if no terminal / no keyboard.
         """
+        # Only attempt if stdin is a real terminal (not piped, not a service)
+        if not sys.stdin.isatty():
+            return
         try:
             import termios
             import tty
+            import select
             fd = sys.stdin.fileno()
             old_settings = termios.tcgetattr(fd)
             try:
                 tty.setcbreak(fd)
                 while robot._running:
+                    # Use select() so the loop can check _running periodically
+                    # instead of blocking forever on stdin.read()
+                    ready, _, _ = select.select([fd], [], [], 0.5)
+                    if not ready:
+                        continue
                     ch = sys.stdin.read(1)
                     if ch == ' ':
                         logger.critical("SPACEBAR KILL SWITCH — EMERGENCY STOP")

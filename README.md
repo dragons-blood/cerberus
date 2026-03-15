@@ -302,8 +302,9 @@ You didn't set up your API key. Go back to Step 2.
 Your Go2 Pro 2 needs a token. See "Go2 Pro 2 Notes" above.
 
 ### "Failed to open camera"
+- **If using STA-L mode:** Make sure `camera.source` is set to `"auto"` or `"webrtc"` in `config/robot_config.yaml`. The default GStreamer UDP multicast does NOT work across WiFi routers — only in AP mode (direct connection to Go2 hotspot).
 - The Go2 must be on and connected — the camera streams over the network
-- Test the stream directly:
+- If using AP mode with GStreamer, test the stream directly:
   ```bash
   gst-launch-1.0 udpsrc address=230.1.1.1 port=1720 ! application/x-rtp,media=video,encoding-name=H264 ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! autovideosink
   ```

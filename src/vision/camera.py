@@ -3,6 +3,10 @@ Camera capture pipeline for Jetson Orin + Unitree Go2.
 
 Supports multiple camera sources:
 - GStreamer UDP multicast (Go2's front camera at 230.1.1.1:1720)
+  Only works in AP mode (direct WiFi to Go2 hotspot).
+- WebRTC video track (via go2-webrtc-connect)
+  Works in both AP and STA-L mode — video comes through the same
+  WebRTC connection used for control commands.
 - USB cameras (via V4L2)
 - CSI cameras (Jetson's MIPI CSI connector)
 
@@ -11,6 +15,7 @@ on demand, so the main control loop never blocks on frame capture.
 """
 
 import logging
+import queue
 import threading
 import time
 from typing import Optional
@@ -73,6 +78,8 @@ class Camera:
         self._thread: Optional[threading.Thread] = None
         self._frame_count = 0
         self._start_time = 0.0
+        # For webrtc source: frames are pushed externally via push_frame()
+        self._frame_queue: queue.Queue = queue.Queue(maxsize=2)
 
     def _build_pipeline(self) -> str | int:
         """Build the appropriate capture pipeline or device index."""
@@ -104,6 +111,17 @@ class Camera:
         """
         if self._running:
             logger.warning("Camera is already running")
+            return
+
+        # WebRTC source: frames are pushed externally by Go2Controller.
+        # No GStreamer pipeline needed — just start and wait for frames.
+        if self.source == "webrtc":
+            logger.info("Camera source=webrtc — waiting for frames from WebRTC video track")
+            self._running = True
+            self._start_time = time.time()
+            self._thread = threading.Thread(target=self._webrtc_capture_loop, daemon=True)
+            self._thread.start()
+            logger.info("Camera started (source=webrtc)")
             return
 
         pipeline = self._build_pipeline()
@@ -170,6 +188,45 @@ class Camera:
             self._cap.release()
             self._cap = None
         logger.info("Camera stopped (captured %d frames)", self._frame_count)
+
+    def push_frame(self, frame: np.ndarray):
+        """
+        Push a frame from an external source (e.g., WebRTC video track).
+
+        Used when source="webrtc". The Go2Controller calls this with each
+        video frame received over the WebRTC connection.
+
+        Drops old frames if the queue is full (we only care about the latest).
+        """
+        try:
+            self._frame_queue.put_nowait(frame)
+        except queue.Full:
+            # Queue is full — drop the oldest frame to make room
+            try:
+                self._frame_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._frame_queue.put_nowait(frame)
+            except queue.Full:
+                pass
+
+    def _webrtc_capture_loop(self):
+        """Background thread for webrtc source — pulls from push queue."""
+        first_frame = True
+        while self._running:
+            try:
+                frame = self._frame_queue.get(timeout=0.5)
+                if first_frame:
+                    # Reset start time on first frame so FPS calculation
+                    # doesn't include the dead time waiting for WebRTC setup.
+                    self._start_time = time.time()
+                    first_frame = False
+                with self._frame_lock:
+                    self._frame = frame
+                    self._frame_count += 1
+            except queue.Empty:
+                continue
 
     def _capture_loop(self):
         """Background thread that continuously grabs frames."""

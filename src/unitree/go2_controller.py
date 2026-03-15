@@ -102,6 +102,8 @@ class Go2Controller:
         self._pc = None           # RTCPeerConnection (fallback)
         self._dc = None           # RTCDataChannel (fallback)
         self._heartbeat_task: Optional[asyncio.Task] = None
+        self._video_task: Optional[asyncio.Task] = None
+        self._camera = None       # Camera instance for pushing WebRTC video frames
         self._use_community_lib = False
 
         self._status = Go2Status(
@@ -117,6 +119,16 @@ class Go2Controller:
     def connected(self) -> bool:
         """Thread-safe check of connection status."""
         return self._connected_event.is_set()
+
+    def set_camera(self, camera):
+        """
+        Set a Camera instance to receive WebRTC video frames.
+
+        When connected, frames from the Go2's video track are decoded and
+        pushed to camera.push_frame(). This is how the camera works in
+        STA-L mode, where UDP multicast doesn't cross the WiFi router.
+        """
+        self._camera = camera
 
     async def connect(self):
         """
@@ -142,7 +154,8 @@ class Go2Controller:
 
     async def _connect_community_lib(self):
         """Connect using the go2-webrtc-connect community library."""
-        from go2_webrtc_driver.webrtc.go2_connection import Go2WebRTCConnection, WebRTCConnectionMethod
+        from go2_webrtc_driver.webrtc_driver import Go2WebRTCConnection
+        from go2_webrtc_driver.constants import WebRTCConnectionMethod
 
         # Map config string to WebRTCConnectionMethod enum
         method_map = {
@@ -164,6 +177,20 @@ class Go2Controller:
         if hasattr(self._conn, 'on_disconnect'):
             self._conn.on_disconnect = self._handle_disconnect
 
+        # Subscribe to robot state updates so battery/position/velocity are tracked.
+        # The community lib handles data channel messages internally via pub_sub.
+        pub_sub = getattr(self._conn, 'pub_sub', None)
+        if pub_sub and hasattr(pub_sub, 'subscribe'):
+            try:
+                pub_sub.subscribe("rt/lf/state", self._handle_state_update)
+                logger.info("Subscribed to robot state updates via pub_sub")
+            except Exception as e:
+                logger.warning("Failed to subscribe to state updates: %s", e)
+
+        # Start video frame reader if camera is in webrtc mode
+        if self._camera and self._conn.pc:
+            self._video_task = asyncio.create_task(self._read_video_frames())
+
         logger.info("Connected to Go2 via go2-webrtc-connect")
 
     async def _connect_aiortc(self):
@@ -182,6 +209,10 @@ class Go2Controller:
 
         self._pc = RTCPeerConnection()
         self._dc = self._pc.createDataChannel("data", ordered=True)
+
+        # Request video track if camera needs WebRTC frames
+        if self._camera:
+            self._pc.addTransceiver("video", direction="recvonly")
 
         @self._dc.on("open")
         def on_open():
@@ -226,6 +257,11 @@ class Go2Controller:
         self.state = RobotState.STANDING
 
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
+        # Start video frame reader if camera is in webrtc mode
+        if self._camera:
+            self._video_task = asyncio.create_task(self._read_video_frames())
+
         logger.info("Connected to Go2 via aiortc")
 
     def _handle_disconnect(self):
@@ -237,6 +273,10 @@ class Go2Controller:
 
     async def disconnect(self):
         """Gracefully disconnect from the robot."""
+        if self._video_task:
+            self._video_task.cancel()
+            self._video_task = None
+
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
             self._heartbeat_task = None
@@ -262,23 +302,27 @@ class Go2Controller:
 
         Returns True if the command was sent, False if the connection is down.
         """
-        msg = {
-            "header": {"identity": {"id": api_id, "api_id": api_id}},
-            "parameter": json.dumps(parameter or {}),
-        }
-        msg_str = json.dumps(msg)
-
         if self._use_community_lib and self._conn:
             try:
-                # Try pub_sub first (the standard go2-webrtc-connect API)
+                # The community lib's pub_sub.publish() expects a topic and a
+                # dict message. It handles JSON serialization and data channel
+                # framing internally.
                 pub_sub = getattr(self._conn, 'pub_sub', None)
                 if pub_sub:
-                    pub_sub.publish("rt/api/sport/request", msg_str)
+                    msg = {
+                        "header": {"identity": {"id": api_id, "api_id": api_id}},
+                        "parameter": parameter or {},
+                    }
+                    pub_sub.publish("rt/api/sport/request", msg)
                     return True
-                # Fallback: raw data channel access
+                # Fallback: raw data channel access (older library versions)
                 dc = getattr(self._conn, 'datachannel', None) or getattr(self._conn, 'dc', None)
                 if dc:
-                    dc.send(msg_str)
+                    msg = {
+                        "header": {"identity": {"id": api_id, "api_id": api_id}},
+                        "parameter": json.dumps(parameter or {}),
+                    }
+                    dc.send(json.dumps(msg))
                     return True
                 logger.warning("Cannot find data channel on community lib connection")
                 return False
@@ -288,6 +332,12 @@ class Go2Controller:
                 return False
 
         # Fallback: raw aiortc data channel
+        msg = {
+            "header": {"identity": {"id": api_id, "api_id": api_id}},
+            "parameter": json.dumps(parameter or {}),
+        }
+        msg_str = json.dumps(msg)
+
         if not self._dc or self._dc.readyState != "open":
             logger.warning("Data channel not open, cannot send command (api_id=%d)", api_id)
             self._connected_event.clear()
@@ -301,34 +351,51 @@ class Go2Controller:
             self._connected_event.clear()
             return False
 
+    def _handle_state_update(self, message):
+        """Handle state updates from the community lib's pub_sub."""
+        try:
+            # The community lib may pass the message as a dict or JSON string
+            if isinstance(message, str):
+                data = json.loads(message)
+            elif isinstance(message, dict):
+                data = message
+            else:
+                return
+            # State data may be nested under "data" key (same as aiortc path)
+            if "data" in data and isinstance(data["data"], dict):
+                data = data["data"]
+            self._update_status(data)
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
+            logger.debug("Failed to parse state update: %s", e)
+
     def _handle_message(self, message: str):
-        """Handle incoming state messages from the robot."""
+        """Handle incoming state messages from the robot (aiortc fallback)."""
         try:
             data = json.loads(message)
             if "data" in data:
-                state_data = data["data"]
-                self._status = Go2Status(
-                    state=self.state,
-                    battery_percent=state_data.get("bms", {}).get("soc", 0),
-                    position=(
-                        state_data.get("position", [0, 0, 0])[0] if isinstance(state_data.get("position"), list) else 0,
-                        state_data.get("position", [0, 0, 0])[1] if isinstance(state_data.get("position"), list) else 0,
-                        state_data.get("position", [0, 0, 0])[2] if isinstance(state_data.get("position"), list) else 0,
-                    ),
-                    velocity=(
-                        state_data.get("velocity", [0, 0, 0])[0] if isinstance(state_data.get("velocity"), list) else 0,
-                        state_data.get("velocity", [0, 0, 0])[1] if isinstance(state_data.get("velocity"), list) else 0,
-                        state_data.get("velocity", [0, 0, 0])[2] if isinstance(state_data.get("velocity"), list) else 0,
-                    ),
-                    imu_rpy=(
-                        state_data.get("imu", {}).get("rpy", [0, 0, 0])[0] if isinstance(state_data.get("imu", {}).get("rpy"), list) else 0,
-                        state_data.get("imu", {}).get("rpy", [0, 0, 0])[1] if isinstance(state_data.get("imu", {}).get("rpy"), list) else 0,
-                        state_data.get("imu", {}).get("rpy", [0, 0, 0])[2] if isinstance(state_data.get("imu", {}).get("rpy"), list) else 0,
-                    ),
-                    timestamp=time.time(),
-                )
+                self._update_status(data["data"])
         except (json.JSONDecodeError, KeyError, IndexError) as e:
             logger.debug("Failed to parse state message: %s", e)
+
+    def _update_status(self, state_data: dict):
+        """Update internal status from robot state data."""
+        def _safe_list(val, idx, default=0):
+            if isinstance(val, list) and len(val) > idx:
+                return val[idx]
+            return default
+
+        position = state_data.get("position", [0, 0, 0])
+        velocity = state_data.get("velocity", [0, 0, 0])
+        imu_rpy = state_data.get("imu", {}).get("rpy", [0, 0, 0])
+
+        self._status = Go2Status(
+            state=self.state,
+            battery_percent=state_data.get("bms", {}).get("soc", 0),
+            position=(_safe_list(position, 0), _safe_list(position, 1), _safe_list(position, 2)),
+            velocity=(_safe_list(velocity, 0), _safe_list(velocity, 1), _safe_list(velocity, 2)),
+            imu_rpy=(_safe_list(imu_rpy, 0), _safe_list(imu_rpy, 1), _safe_list(imu_rpy, 2)),
+            timestamp=time.time(),
+        )
 
     async def _heartbeat_loop(self):
         """Send periodic heartbeats to keep the connection alive."""
@@ -338,6 +405,70 @@ class Go2Controller:
                 await asyncio.sleep(0.5)
         except asyncio.CancelledError:
             pass
+
+    async def _read_video_frames(self):
+        """
+        Read video frames from the WebRTC video track and push to camera.
+
+        This is how the camera works in STA-L mode: instead of UDP multicast
+        (which doesn't cross WiFi routers), frames come through the same
+        WebRTC connection used for control commands.
+        """
+        try:
+            # Find the video track on the peer connection.
+            # The track may not be available immediately after connect() returns
+            # because ICE negotiation and track setup are asynchronous. Retry
+            # with backoff to avoid a race condition.
+            track = None
+            pc = self._conn.pc if self._conn else self._pc
+            if not pc:
+                logger.warning("No peer connection for video frames")
+                return
+
+            for attempt in range(10):
+                for transceiver in pc.getTransceivers():
+                    if (transceiver.receiver and transceiver.receiver.track
+                            and transceiver.receiver.track.kind == "video"):
+                        track = transceiver.receiver.track
+                        break
+                if track:
+                    break
+                wait_time = min(0.5 * (attempt + 1), 3.0)
+                logger.info("Waiting for WebRTC video track (attempt %d/10, %.1fs)...",
+                            attempt + 1, wait_time)
+                await asyncio.sleep(wait_time)
+
+            if not track:
+                logger.warning("No video track found on WebRTC connection after 10 attempts")
+                return
+
+            logger.info("WebRTC video track found — streaming frames to camera")
+            frame_count = 0
+            while self.connected:
+                try:
+                    frame = await asyncio.wait_for(track.recv(), timeout=5.0)
+                    # Convert av.VideoFrame to numpy BGR array
+                    img = frame.to_ndarray(format="bgr24")
+                    self._camera.push_frame(img)
+                    frame_count += 1
+                    if frame_count == 1:
+                        logger.info("First WebRTC video frame received (%dx%d)",
+                                     img.shape[1], img.shape[0])
+                except asyncio.TimeoutError:
+                    logger.warning("WebRTC video frame timeout — still waiting")
+                    continue
+                except Exception as e:
+                    if "MediaStreamError" in type(e).__name__:
+                        logger.warning("WebRTC video track ended")
+                        break
+                    logger.error("WebRTC video frame error: %s", e)
+                    break
+
+            logger.info("WebRTC video reader stopped (received %d frames)", frame_count)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("WebRTC video reader failed: %s", e)
 
     @property
     def status(self) -> Go2Status:
@@ -409,15 +540,17 @@ class Go2Controller:
         or the current asyncio task is cancelled, returns early so the caller
         can stop gracefully.
         """
-        elapsed = 0.0
-        while elapsed < duration:
-            chunk = min(step, duration - elapsed)
+        deadline = time.monotonic() + duration
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            chunk = min(step, remaining)
             try:
                 await asyncio.sleep(chunk)
             except asyncio.CancelledError:
                 logger.info("Movement interrupted by task cancellation")
                 return
-            elapsed += chunk
             if not self.connected:
                 logger.warning("Connection lost during movement — aborting")
                 return
@@ -478,6 +611,8 @@ class Go2Controller:
     async def recovery_stand(self):
         """Attempt to recover to standing position (e.g., after a fall)."""
         logger.info("Recovery stand")
-        self._send_command(SportAPI.RECOVERY_STAND)
-        self.state = RobotState.STANDING
+        if self._send_command(SportAPI.RECOVERY_STAND):
+            self.state = RobotState.STANDING
+        else:
+            logger.error("recovery_stand command failed to send")
         await asyncio.sleep(2.0)

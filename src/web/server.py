@@ -11,10 +11,13 @@ Provides a browser-based interface for:
 - Log viewer
 - Robot connectivity check (ping)
 
-Runs on 0.0.0.0:8080 by default. No auth — intended for local network only.
+Runs on 0.0.0.0:8080 by default. Set WEB_PASSWORD in config/.env to
+require a password (HTTP Basic Auth). Without a password, the dashboard
+is open to anyone on the local network.
 """
 
 import asyncio
+import hmac
 import logging
 import os
 import re
@@ -59,6 +62,27 @@ class WebServer:
         # Suppress Flask request logging in production
         flask_log = logging.getLogger("werkzeug")
         flask_log.setLevel(logging.WARNING)
+
+        # ---- Optional HTTP Basic Auth ----
+        # Set WEB_PASSWORD in config/.env to enable. Username is always "robot".
+        web_password = os.environ.get("WEB_PASSWORD", "").strip()
+        if web_password:
+            logger.info("Web dashboard authentication ENABLED")
+
+            @app.before_request
+            def _check_auth():
+                auth = request.authorization
+                if not auth or not hmac.compare_digest(auth.password or "", web_password):
+                    return Response(
+                        "Authentication required. Set WEB_PASSWORD in config/.env.\n",
+                        401,
+                        {"WWW-Authenticate": 'Basic realm="Gemini Robot Dog"'},
+                    )
+        else:
+            logger.warning(
+                "Web dashboard has NO authentication. Anyone on the network can "
+                "control the robot. Set WEB_PASSWORD in config/.env to secure it."
+            )
 
         # ---- Routes ----
 
@@ -176,27 +200,33 @@ class WebServer:
                 "recovery_stand": go2.recovery_stand,
             }
 
+            # Clamp parameters to safe bounds (same limits as guardrails)
+            max_speed = self.robot.config["unitree"]["max_linear_velocity"]
+            max_angular = self.robot.config["unitree"]["max_angular_velocity"]
+            max_distance = 3.0  # meters per single action
+            max_angle = 180.0   # degrees per single turn
+
             try:
                 if action in actions:
                     self._run_async(actions[action]())
                     return jsonify({"status": "ok", "action": action})
                 elif action == "move_forward":
-                    self._run_async(go2.move_forward(
-                        distance=float(params.get("distance", 0.5)),
-                        speed=float(params.get("speed", 0.3)),
-                    ))
+                    distance = max(0.1, min(float(params.get("distance", 0.5)), max_distance))
+                    speed = max(0.1, min(float(params.get("speed", 0.3)), max_speed))
+                    self._run_async(go2.move_forward(distance=distance, speed=speed))
                     return jsonify({"status": "ok", "action": action})
                 elif action == "move_backward":
-                    self._run_async(go2.move_backward(
-                        distance=float(params.get("distance", 0.5)),
-                        speed=float(params.get("speed", 0.3)),
-                    ))
+                    distance = max(0.1, min(float(params.get("distance", 0.5)), max_distance))
+                    speed = max(0.1, min(float(params.get("speed", 0.3)), max_speed))
+                    self._run_async(go2.move_backward(distance=distance, speed=speed))
                     return jsonify({"status": "ok", "action": action})
                 elif action == "turn_left":
-                    self._run_async(go2.turn(angle_degrees=float(params.get("angle", 30))))
+                    angle = max(1.0, min(float(params.get("angle", 30)), max_angle))
+                    self._run_async(go2.turn(angle_degrees=angle))
                     return jsonify({"status": "ok", "action": action})
                 elif action == "turn_right":
-                    self._run_async(go2.turn(angle_degrees=-float(params.get("angle", 30))))
+                    angle = max(1.0, min(float(params.get("angle", 30)), max_angle))
+                    self._run_async(go2.turn(angle_degrees=-angle))
                     return jsonify({"status": "ok", "action": action})
                 else:
                     return jsonify({"error": f"Unknown action: {action}"}), 400
@@ -245,6 +275,11 @@ class WebServer:
             # Basic format validation
             if not new_key.startswith("AIza"):
                 return jsonify({"error": "Invalid key format — Gemini keys start with 'AIza'"}), 400
+
+            # Sanitize: API keys are alphanumeric + hyphens/underscores only.
+            # Reject newlines or special chars that could inject into .env.
+            if not re.match(r'^[A-Za-z0-9_\-]+$', new_key):
+                return jsonify({"error": "Invalid characters in key"}), 400
 
             env_file = REPO_DIR / "config" / ".env"
 

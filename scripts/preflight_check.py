@@ -207,7 +207,13 @@ def main():
     print("[6/7] Internet access (for Gemini API)")
     try:
         import urllib.request
-        urllib.request.urlopen("https://generativelanguage.googleapis.com/", timeout=5)
+        import urllib.error
+        try:
+            urllib.request.urlopen("https://generativelanguage.googleapis.com/", timeout=5)
+        except urllib.error.HTTPError:
+            # HTTP error (404, 403, etc.) still means internet is working —
+            # we reached the server, it just didn't like the bare URL.
+            pass
         check("Internet access to Gemini API", True)
     except Exception:
         if conn_method == "sta":
