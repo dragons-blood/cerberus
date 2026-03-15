@@ -161,13 +161,19 @@ class Go2Controller:
         method_map = {
             "ap": WebRTCConnectionMethod.LocalAP,
             "sta": WebRTCConnectionMethod.LocalSTA,
+            "remote": WebRTCConnectionMethod.Remote,
         }
         method = method_map.get(self.connection_method, WebRTCConnectionMethod.LocalAP)
 
-        logger.info("Connecting to Go2 at %s via go2-webrtc-connect (mode=%s)...",
-                     self.robot_ip, self.connection_method)
+        logger.info("Connecting to Go2 at %s via go2-webrtc-connect (mode=%s, token=%s)...",
+                     self.robot_ip, self.connection_method,
+                     "set" if self.token else "none")
 
-        self._conn = Go2WebRTCConnection(method, ip=self.robot_ip)
+        self._conn = Go2WebRTCConnection(
+            method,
+            serialNumber=self.token or None,
+            ip=self.robot_ip,
+        )
         await self._conn.connect()
 
         self._connected_event.set()
