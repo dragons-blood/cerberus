@@ -243,6 +243,8 @@ class WebServer:
             text = data["instruction"].strip()
             if not text:
                 return jsonify({"error": "Empty instruction"}), 400
+            if len(text) > 1000:
+                return jsonify({"error": "Instruction too long (max 1000 chars)"}), 400
 
             # Run async in background so the HTTP request returns immediately
             def _run():

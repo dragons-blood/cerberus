@@ -78,10 +78,15 @@ def validate_action(action, config: GuardrailConfig) -> tuple[bool, str]:
 
     if action.action == "speak":
         message = params.get("message", "")
+        if len(message) > 500:
+            return False, f"Speak message too long ({len(message)} chars, max 500)"
         # Block potential data exfiltration
         exfil_keywords = ["api_key", "api key", "password", "secret",
                           "credential", "token", "system prompt",
-                          "instruction", "ignore previous"]
+                          "instruction", "ignore previous",
+                          "google_api", "unitree_token", "env file",
+                          ".env", "os.environ", "config key",
+                          "serial number", "private key"]
         msg_lower = message.lower()
         for kw in exfil_keywords:
             if kw in msg_lower:

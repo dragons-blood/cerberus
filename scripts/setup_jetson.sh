@@ -38,7 +38,7 @@ echo ""
 # --- System packages ---
 echo "[1/6] Installing system packages (this may take a few minutes)..."
 sudo apt-get update -qq
-sudo apt-get install -y -qq \
+if ! sudo apt-get install -y -qq \
     python3-pip \
     python3-venv \
     python3-dev \
@@ -57,8 +57,10 @@ sudo apt-get install -y -qq \
     libsrtp2-dev \
     libvpx-dev \
     curl \
-    git \
-    > /dev/null 2>&1
+    git; then
+    echo "  ERROR: Some system packages failed to install. Check output above."
+    exit 1
+fi
 echo "  System packages installed"
 echo ""
 
@@ -67,11 +69,11 @@ echo "[2/6] Setting up Python virtual environment..."
 if [ -d "$VENV_DIR" ]; then
     echo "  Virtual environment already exists at $VENV_DIR"
 else
-    python3 -m venv "$VENV_DIR" --system-site-packages
+    python3 -m venv "$VENV_DIR" --system-site-packages || { echo "  ERROR: Failed to create virtual environment"; exit 1; }
     echo "  Created virtual environment at $VENV_DIR"
 fi
 source "$VENV_DIR/bin/activate"
-pip install --upgrade pip setuptools wheel -q
+pip install --upgrade pip setuptools wheel -q || { echo "  ERROR: Failed to upgrade pip"; exit 1; }
 echo ""
 
 # --- Python dependencies ---

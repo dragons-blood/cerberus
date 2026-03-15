@@ -1,19 +1,23 @@
 # Google Gemini AI SDK
-google-genai>=1.0.0
+google-genai>=1.0.0,<2.0.0
 
 # Image processing
-opencv-python>=4.8.0
-Pillow>=10.0.0
-numpy>=1.24.0
+# On Jetson (ARM64), prefer the system OpenCV from JetPack (python3-opencv)
+# instead of pip — pip's opencv-python compiles from source on ARM64.
+# The venv uses --system-site-packages so the apt package is available.
+opencv-python>=4.8.0,<5.0.0
+Pillow>=10.0.0,<12.0.0
+numpy>=1.24.0,<3.0.0
 
 # Networking / WebRTC for Unitree Go2
-go2-webrtc-connect>=0.2.0  # Community WebRTC library for Go2 (recommended)
-aiohttp>=3.9.0
-aiortc>=1.6.0              # Fallback if go2-webrtc-connect has issues
+unitree_webrtc_connect>=2.0.0  # v2 — supports Go2 Pro 2 / newer firmware
+go2-webrtc-connect>=0.2.0     # v0.2 fallback for older setups
+aiohttp>=3.9.0,<4.0.0
+aiortc>=1.6.0,<2.0.0          # Fallback if community libs have issues
 
 # Configuration
-pyyaml>=6.0
-python-dotenv>=1.0.0
+pyyaml>=6.0,<7.0
+python-dotenv>=1.0.0,<2.0.0
 
 # Web dashboard
-flask>=3.0.0
+flask>=3.0.0,<4.0.0

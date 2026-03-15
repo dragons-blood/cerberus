@@ -14,10 +14,11 @@ Our controller adds on top:
 Compatibility:
   - Go2 AIR / PRO / PRO 2 / EDU (all via WebRTC, no firmware changes)
 
-Install the transport library:
-  pip install go2-webrtc-connect
+Install the transport library (v2 recommended for Pro 2 / newer firmware):
+  pip install unitree_webrtc_connect          # v2 — Go2 + G1 support
+  pip install go2-webrtc-connect              # v0.2 fallback
 
-Reference: https://github.com/legion1581/go2_webrtc_connect
+Reference: https://github.com/legion1581/unitree_webrtc_connect
 """
 
 import asyncio
@@ -53,18 +54,19 @@ class Go2Status:
     timestamp: float
 
 
-# WebRTC Sport Mode API IDs (from Unitree's webrtc_bridge protocol)
+# WebRTC Sport Mode API IDs — must match go2_webrtc_driver.constants.SPORT_CMD
 class SportAPI:
     """Sport mode API command IDs for the Go2."""
-    STAND_UP = 1001
-    STAND_DOWN = 1002  # Lie down / sit
-    BALANCE_STAND = 1003
-    STOP_MOVE = 1004
-    MOVE = 1008        # Velocity move (vx, vy, vyaw)
-    DAMP = 1005        # Emergency soft stop
+    DAMP = 1001            # Emergency soft stop (motors go limp)
+    BALANCE_STAND = 1002
+    STOP_MOVE = 1003
+    STAND_UP = 1004
+    STAND_DOWN = 1005      # Lie down / sit
     RECOVERY_STAND = 1006
+    MOVE = 1008            # Velocity move (vx, vy, vyaw)
+    SIT = 1009
     SWITCH_GAIT = 1011
-    HEART = 1012       # Heartbeat keepalive
+    TRIGGER = 1012         # Heartbeat / trigger
 
 
 class Go2Controller:
@@ -153,9 +155,21 @@ class Go2Controller:
         await self._connect_aiortc()
 
     async def _connect_community_lib(self):
-        """Connect using the go2-webrtc-connect community library."""
-        from go2_webrtc_driver.webrtc_driver import Go2WebRTCConnection
-        from go2_webrtc_driver.constants import WebRTCConnectionMethod
+        """Connect using the Unitree WebRTC community library.
+
+        Tries unitree_webrtc_connect v2 first (supports newer firmware with
+        encrypted signaling on port 9991), then falls back to the older
+        go2_webrtc_driver (v0.2.x) if v2 isn't installed.
+        """
+        # Try v2 library first (supports Go2 Pro 2 / newer firmware)
+        try:
+            from unitree_webrtc_connect.webrtc_driver import UnitreeWebRTCConnection as ConnClass
+            from unitree_webrtc_connect.constants import WebRTCConnectionMethod
+            lib_name = "unitree_webrtc_connect v2"
+        except ImportError:
+            from go2_webrtc_driver.webrtc_driver import Go2WebRTCConnection as ConnClass
+            from go2_webrtc_driver.constants import WebRTCConnectionMethod
+            lib_name = "go2_webrtc_driver"
 
         # Map config string to WebRTCConnectionMethod enum
         method_map = {
@@ -165,37 +179,46 @@ class Go2Controller:
         }
         method = method_map.get(self.connection_method, WebRTCConnectionMethod.LocalAP)
 
-        logger.info("Connecting to Go2 at %s via go2-webrtc-connect (mode=%s, token=%s)...",
-                     self.robot_ip, self.connection_method,
+        logger.info("Connecting to Go2 at %s via %s (mode=%s, token=%s)...",
+                     self.robot_ip, lib_name, self.connection_method,
                      "set" if self.token else "none")
 
-        self._conn = Go2WebRTCConnection(
-            method,
-            serialNumber=self.token or None,
-            ip=self.robot_ip,
-        )
+        # For LocalSTA/LocalAP with an IP, serialNumber is not needed.
+        # Only pass token if the library supports it (some versions accept
+        # it for multi-client auth). Don't pass token as serialNumber —
+        # they are different things (SN is the robot's hardware serial,
+        # token is an auth credential).
+        conn_kwargs = {"ip": self.robot_ip}
+        if self.token:
+            conn_kwargs["token"] = self.token
+        self._conn = ConnClass(method, **conn_kwargs)
         await self._conn.connect()
-
-        self._connected_event.set()
-        self.state = RobotState.STANDING
 
         # Register disconnect handler if the library supports it
         if hasattr(self._conn, 'on_disconnect'):
             self._conn.on_disconnect = self._handle_disconnect
 
         # Subscribe to robot state updates so battery/position/velocity are tracked.
-        # The community lib handles data channel messages internally via pub_sub.
-        pub_sub = getattr(self._conn, 'pub_sub', None)
+        # pub_sub lives on the datachannel wrapper object, not on conn directly.
+        # Do this BEFORE setting connected state — otherwise commands could be
+        # sent before state tracking is ready.
+        dc_wrapper = getattr(self._conn, 'datachannel', None)
+        pub_sub = getattr(dc_wrapper, 'pub_sub', None) if dc_wrapper else None
         if pub_sub and hasattr(pub_sub, 'subscribe'):
             try:
-                pub_sub.subscribe("rt/lf/state", self._handle_state_update)
+                pub_sub.subscribe("rt/lf/sportmodestate", self._handle_state_update)
                 logger.info("Subscribed to robot state updates via pub_sub")
             except Exception as e:
                 logger.warning("Failed to subscribe to state updates: %s", e)
 
+        # Mark connected only after subscriptions are set up
+        self._connected_event.set()
+        self.state = RobotState.STANDING
+
         # Start video frame reader if camera is in webrtc mode
         if self._camera and self._conn.pc:
             self._video_task = asyncio.create_task(self._read_video_frames())
+            self._video_task.add_done_callback(self._on_video_task_done)
 
         logger.info("Connected to Go2 via go2-webrtc-connect")
 
@@ -236,23 +259,33 @@ class Go2Controller:
         offer = await self._pc.createOffer()
         await self._pc.setLocalDescription(offer)
 
-        # WebRTC signaling endpoint. Port 8081 is the default for Go2 Pro
-        # on stock firmware. Some firmware versions or models may use 9991.
-        # The community library (go2-webrtc-connect) handles this internally.
-        signal_url = f"http://{self.robot_ip}:8081/offer"
+        # WebRTC signaling — try port 8081 (older firmware), then 9991 (newer).
+        # The community library handles this internally, but our aiortc
+        # fallback needs to try both.
+        payload = {
+            "sdp": self._pc.localDescription.sdp,
+            "type": self._pc.localDescription.type,
+            "token": self.token,
+        }
+        answer = None
+        signal_ports = [8081, 9991]
         async with aiohttp.ClientSession() as session:
-            payload = {
-                "sdp": self._pc.localDescription.sdp,
-                "type": self._pc.localDescription.type,
-                "token": self.token,
-            }
-            async with session.post(signal_url, json=payload) as resp:
-                if resp.status != 200:
-                    raise ConnectionError(
-                        f"WebRTC signaling failed (HTTP {resp.status}). "
-                        f"Is the robot on and connected to the network?"
-                    )
-                answer = await resp.json()
+            for port in signal_ports:
+                signal_url = f"http://{self.robot_ip}:{port}/offer"
+                try:
+                    async with session.post(signal_url, json=payload, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                        if resp.status == 200:
+                            answer = await resp.json()
+                            logger.info("WebRTC signaling succeeded on port %d", port)
+                            break
+                        logger.warning("Signaling port %d returned HTTP %d", port, resp.status)
+                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                    logger.warning("Signaling port %d failed: %s", port, e)
+            if answer is None:
+                raise ConnectionError(
+                    f"WebRTC signaling failed on all ports ({signal_ports}). "
+                    f"Is the robot on and connected to the network?"
+                )
 
         await self._pc.setRemoteDescription(
             RTCSessionDescription(sdp=answer["sdp"], type=answer["type"])
@@ -267,6 +300,7 @@ class Go2Controller:
         # Start video frame reader if camera is in webrtc mode
         if self._camera:
             self._video_task = asyncio.create_task(self._read_video_frames())
+            self._video_task.add_done_callback(self._on_video_task_done)
 
         logger.info("Connected to Go2 via aiortc")
 
@@ -279,22 +313,30 @@ class Go2Controller:
 
     async def disconnect(self):
         """Gracefully disconnect from the robot."""
-        if self._video_task:
-            self._video_task.cancel()
-            self._video_task = None
-
-        if self._heartbeat_task:
-            self._heartbeat_task.cancel()
-            self._heartbeat_task = None
+        # Cancel background tasks and await them so cleanup code runs.
+        # Without awaiting, tasks may still be running when disconnect()
+        # returns, causing use-after-free (e.g., push_frame after camera stop).
+        for task_name in ("_video_task", "_heartbeat_task"):
+            task = getattr(self, task_name, None)
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                setattr(self, task_name, None)
 
         if self._use_community_lib and self._conn:
             try:
                 await self._conn.disconnect()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Error during community lib disconnect: %s", e)
             self._conn = None
         elif self._pc:
-            await self._pc.close()
+            try:
+                await self._pc.close()
+            except Exception as e:
+                logger.warning("Error closing RTCPeerConnection: %s", e)
             self._pc = None
             self._dc = None
 
@@ -310,27 +352,23 @@ class Go2Controller:
         """
         if self._use_community_lib and self._conn:
             try:
-                # The community lib's pub_sub.publish() expects a topic and a
-                # dict message. It handles JSON serialization and data channel
-                # framing internally.
-                pub_sub = getattr(self._conn, 'pub_sub', None)
+                # pub_sub lives on the datachannel wrapper, not on conn directly.
+                dc_wrapper = getattr(self._conn, 'datachannel', None)
+                pub_sub = getattr(dc_wrapper, 'pub_sub', None) if dc_wrapper else None
                 if pub_sub:
-                    msg = {
-                        "header": {"identity": {"id": api_id, "api_id": api_id}},
-                        "parameter": parameter or {},
-                    }
-                    pub_sub.publish("rt/api/sport/request", msg)
-                    return True
-                # Fallback: raw data channel access (older library versions)
-                dc = getattr(self._conn, 'datachannel', None) or getattr(self._conn, 'dc', None)
-                if dc:
+                    # Build the request payload matching the library's format.
+                    # Use publish_without_callback (sync, fire-and-forget) with
+                    # type "req" — the library's publish() is async and would
+                    # need to be awaited, which we can't do from sync context.
                     msg = {
                         "header": {"identity": {"id": api_id, "api_id": api_id}},
                         "parameter": json.dumps(parameter or {}),
                     }
-                    dc.send(json.dumps(msg))
+                    pub_sub.publish_without_callback(
+                        "rt/api/sport/request", msg, "req"
+                    )
                     return True
-                logger.warning("Cannot find data channel on community lib connection")
+                logger.warning("Cannot find pub_sub on community lib connection")
                 return False
             except Exception as e:
                 logger.error("Failed to send command via community lib: %s", e)
@@ -407,10 +445,18 @@ class Go2Controller:
         """Send periodic heartbeats to keep the connection alive."""
         try:
             while True:
-                self._send_command(SportAPI.HEART)
+                self._send_command(SportAPI.TRIGGER)
                 await asyncio.sleep(0.5)
         except asyncio.CancelledError:
             pass
+
+    def _on_video_task_done(self, task: asyncio.Task):
+        """Callback when video reader task exits — log unexpected failures."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            logger.error("WebRTC video task failed unexpectedly: %s", exc)
 
     async def _read_video_frames(self):
         """

@@ -337,6 +337,10 @@ class Robot:
         Captures a frame, sends it to Gemini for planning, then executes
         the resulting action sequence on the Go2.
         """
+        if len(instruction) > 1000:
+            logger.warning("Instruction too long (%d chars), truncating to 1000", len(instruction))
+            instruction = instruction[:1000]
+
         logger.info("Instruction: %s", instruction)
 
         # Capture current scene
@@ -345,8 +349,11 @@ class Robot:
             logger.error("No camera frame available")
             return
 
-        # Plan actions
-        actions = self.gemini.plan_actions(frame, instruction)
+        # Plan actions — run in executor to avoid blocking the event loop.
+        # Without this, heartbeat, video frames, and WebRTC stop for up to 30s
+        # while Gemini thinks.
+        loop = asyncio.get_running_loop()
+        actions = await loop.run_in_executor(None, self.gemini.plan_actions, frame, instruction)
         if not actions:
             logger.warning("Gemini returned no actions for: %s", instruction)
             return
@@ -411,7 +418,8 @@ class Robot:
                 await asyncio.sleep(0.5)
                 continue
 
-            actions = self.gemini.plan_actions(frame, instruction)
+            loop = asyncio.get_running_loop()
+            actions = await loop.run_in_executor(None, self.gemini.plan_actions, frame, instruction)
             actions, _ = validate_plan(actions, self.guardrails)
 
             if actions:
@@ -467,14 +475,14 @@ class Robot:
             elif user_input == "!scene":
                 frame = self.camera.get_frame()
                 if frame is not None:
-                    desc = self.gemini.describe_scene(frame)
+                    desc = await loop.run_in_executor(None, self.gemini.describe_scene, frame)
                     print(f"Scene: {desc}")
                 else:
                     print("No camera frame available")
             elif user_input == "!detect":
                 frame = self.camera.get_frame()
                 if frame is not None:
-                    objects = self.gemini.detect_objects(frame)
+                    objects = await loop.run_in_executor(None, self.gemini.detect_objects, frame)
                     for obj in objects:
                         print(f"  {obj.label} at ({obj.x:.2f}, {obj.y:.2f})")
                     if not objects:
@@ -521,12 +529,15 @@ async def main():
     # without unbounded growth (max 5MB per file, keep 3 backups)
     from logging.handlers import RotatingFileHandler
     log_dir = Path(__file__).parent.parent / "logs"
-    log_dir.mkdir(exist_ok=True)
-    file_handler = RotatingFileHandler(
-        log_dir / "robot.log", maxBytes=5_000_000, backupCount=3
-    )
-    file_handler.setFormatter(logging.Formatter(log_format, datefmt=log_datefmt))
-    logging.getLogger().addHandler(file_handler)
+    try:
+        log_dir.mkdir(exist_ok=True)
+        file_handler = RotatingFileHandler(
+            log_dir / "robot.log", maxBytes=5_000_000, backupCount=3
+        )
+        file_handler.setFormatter(logging.Formatter(log_format, datefmt=log_datefmt))
+        logging.getLogger().addHandler(file_handler)
+    except (PermissionError, OSError) as e:
+        logging.warning("Cannot write to logs directory (%s) — logging to stderr only", e)
 
     # Load environment variables (inside main, not at import time)
     _env_path = Path(__file__).parent.parent / "config" / ".env"
