@@ -28,7 +28,7 @@ unitree:
   #   AP mode:     192.168.12.1 (Go2 hotspot, always the same)
   #
   # >>> CHANGE THIS to your Go2's actual IP <<<
-  robot_ip: "192.168.12.1"
+  robot_ip: "192.168.1.210"
   # Robot IP when connected via Ethernet (for EDU models)
   robot_ip_ethernet: "192.168.123.18"
   # WebRTC auth token. Empty string works for Go2 Pro.
